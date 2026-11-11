@@ -128,3 +128,37 @@ describe("convertValue", () => {
     expect(convertValue(5, schema[0], "date")).toBeNull();
   });
 });
+
+import { csvCell, safeBlobType, safeHref } from "./logic";
+
+describe("safety helpers", () => {
+  it("only links http, https and mailto", () => {
+    expect(safeHref("https://a.tw/x")).toBe("https://a.tw/x");
+    expect(safeHref("example.com")).toBe("https://example.com");
+    expect(safeHref("mailto:a@b.tw")).toBe("mailto:a@b.tw");
+    expect(safeHref("javascript:alert(1)")).toBeNull();
+    expect(safeHref(" JaVaScRiPt:alert(1)")).toBeNull();
+    expect(safeHref("data:text/html,<script>1</script>")).toBeNull();
+    expect(safeHref("file:///c:/x")).toBeNull();
+    expect(safeHref("")).toBeNull();
+  });
+  it("neutralises spreadsheet formulas in CSV but keeps numbers", () => {
+    expect(csvCell("=HYPERLINK(1)")).toBe("'=HYPERLINK(1)");
+    expect(csvCell("+1+1")).toBe("'+1+1");
+    expect(csvCell("@SUM(A1)")).toBe("'@SUM(A1)");
+    expect(csvCell("-5")).toBe("-5");
+    expect(csvCell("-3.25")).toBe("-3.25");
+    expect(csvCell("-cmd|x")).toBe("'-cmd|x");
+    expect(csvCell('a,"b"')).toBe('"a,""b"""');
+    expect(csvCell("普通文字")).toBe("普通文字");
+  });
+  it("never serves stored files as active content", () => {
+    expect(safeBlobType("image/png")).toBe("image/png");
+    expect(safeBlobType("application/pdf")).toBe("application/pdf");
+    expect(safeBlobType("video/mp4")).toBe("video/mp4");
+    expect(safeBlobType("image/svg+xml")).toBe("application/octet-stream");
+    expect(safeBlobType("text/html")).toBe("application/octet-stream");
+    expect(safeBlobType("TEXT/HTML; charset=utf-8")).toBe("application/octet-stream");
+    expect(safeBlobType("")).toBe("application/octet-stream");
+  });
+});

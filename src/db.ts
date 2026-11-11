@@ -11,7 +11,16 @@ import type {
   Task,
   TaskList,
 } from "./types";
-import { blocksToText, guessType, linkedPageIds, nextDue, parseCsv, sortBetween, uid } from "./lib/logic";
+import {
+  blocksToText,
+  guessType,
+  linkedPageIds,
+  nextDue,
+  parseCsv,
+  safeBlobType,
+  sortBetween,
+  uid,
+} from "./lib/logic";
 
 class AppDB extends Dexie {
   pages!: Table<Page, string>;
@@ -429,7 +438,9 @@ export async function resolveFileUrl(url: string): Promise<string> {
   if (hit) return hit;
   const f = await db.files.get(id);
   if (!f) return url;
-  const obj = URL.createObjectURL(f.blob);
+  // Re-wrap with a vetted type: a stored file (possibly from an imported backup)
+  // must never be served from our origin as HTML or SVG, where it could run script.
+  const obj = URL.createObjectURL(new Blob([f.blob], { type: safeBlobType(f.type) }));
   urlCache.set(id, obj);
   return obj;
 }
@@ -474,12 +485,18 @@ export async function importAll(json: string) {
     throw new Error("這不是有效的備份檔");
   }
   const files: StoredFile[] = await Promise.all(
-    (data.files ?? []).map(async (f: { id: string; name: string; type: string; data: string }) => ({
-      id: f.id,
-      name: f.name,
-      type: f.type,
-      blob: await (await fetch(f.data)).blob(),
-    })),
+    (data.files ?? []).map(async (f: { id: string; name: string; type: string; data: string }) => {
+      // only embedded data: never let a backup file make us fetch some other URL
+      if (typeof f.data !== "string" || !f.data.startsWith("data:")) {
+        throw new Error("備份檔裡的附件格式不正確");
+      }
+      return {
+        id: String(f.id),
+        name: String(f.name),
+        type: String(f.type),
+        blob: await (await fetch(f.data)).blob(),
+      };
+    }),
   );
   const tables = [db.pages, db.tasks, db.lists, db.focus, db.habits, db.files, db.history];
   await db.transaction("rw", tables, async () => {

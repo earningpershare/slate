@@ -39,7 +39,7 @@ import {
   trashPage,
   updatePage,
 } from "../db";
-import { applyView, blocksToText, cellValue, displayValue, outlineOf } from "../lib/logic";
+import { applyView, blocksToText, cellValue, csvCell, displayValue, outlineOf } from "../lib/logic";
 import { TEMPLATES, type Template } from "../lib/templates";
 import { peek, toast } from "../stores";
 import type { Page } from "../types";
@@ -71,14 +71,13 @@ async function exportCsv(dbPage: Page) {
   const relDbs = schema.filter((p) => p.type === "relation" && p.relationDb).map((p) => p.relationDb!);
   const related = relDbs.length ? await db.pages.where("parentId").anyOf(relDbs).toArray() : [];
   const titles = new Map(related.map((r) => [r.id, r.title]));
-  const esc = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
   const lines = [
     ["名稱", ...schema.map((p) => p.name)],
     ...rows.map((r) => [
       r.title,
       ...schema.map((p) => displayValue(cellValue(r, p.id, schema, titles), p, titles)),
     ]),
-  ].map((l) => l.map(esc).join(","));
+  ].map((l) => l.map(csvCell).join(","));
   // BOM so Excel opens the UTF-8 file with the right encoding
   download(safeName(dbPage.title) + ".csv", "﻿" + lines.join("\r\n"), "text/csv");
 }

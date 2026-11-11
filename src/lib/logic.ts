@@ -418,3 +418,37 @@ export function quadrant(task: Pick<Task, "priority" | "due">, base = today()): 
   const urgent = !!task.due && dayjs(task.due).diff(dayjs(base), "day") <= 1;
   return important ? (urgent ? 1 : 2) : urgent ? 3 : 4;
 }
+
+/**
+ * Link target for a URL cell, or null when it must not be clickable.
+ * Only http(s) and mailto are allowed, so a value such as "javascript:..."
+ * (typed, or arriving through an imported CSV / backup) can never run as a link.
+ */
+export function safeHref(value: string): string | null {
+  const v = value.trim();
+  if (!v) return null;
+  if (/^(https?:\/\/|mailto:)/i.test(v)) return v;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return null;
+  return "https://" + v;
+}
+
+/**
+ * One CSV cell. Text that a spreadsheet would run as a formula (= + - @ ...)
+ * gets a leading apostrophe; plain numbers such as -5 are left alone.
+ */
+export function csvCell(value: string): string {
+  let s = value;
+  if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = "'" + s;
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+/** MIME types that are safe to hand to the browser as-is from stored files. */
+export function safeBlobType(type: string): string {
+  const t = type.toLowerCase().split(";")[0].trim();
+  const ok =
+    /^image\/(png|jpeg|gif|webp|avif|bmp)$/.test(t) ||
+    /^(audio|video)\/[a-z0-9.+-]+$/.test(t) ||
+    t === "application/pdf";
+  // anything else (html, svg, scripts...) is served as an opaque download
+  return ok ? t : "application/octet-stream";
+}

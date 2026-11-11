@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { ExternalLink, X } from "lucide-react";
 import { OPTION_COLORS, db } from "../../db";
-import { cellValue, uid, type Titles } from "../../lib/logic";
+import { cellValue, safeHref, uid, type Titles } from "../../lib/logic";
 import { peek } from "../../stores";
 import type { Page, Property, PropValue, SelectOption } from "../../types";
 import { CommitInput, Popover } from "../../ui";
@@ -96,6 +96,7 @@ export function PropCell({
       );
     case "url": {
       const v = typeof value === "string" ? value : "";
+      const href = safeHref(v);
       return (
         <span className="cell-url">
           <CommitInput
@@ -104,9 +105,9 @@ export function PropCell({
             onCommit={(nv) => onChange(nv.trim() || null)}
             aria-label={prop.name}
           />
-          {v && (
+          {href && (
             <a
-              href={/^[a-z]+:/i.test(v) ? v : "https://" + v}
+              href={href}
               target="_blank"
               rel="noreferrer"
               className="icon-btn"
