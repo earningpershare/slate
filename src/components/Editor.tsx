@@ -22,6 +22,7 @@ import { FileText, Lightbulb, Link2, Maximize2, Plus, Table2 } from "lucide-reac
 import { createDatabase, createPage, db, resolveFileUrl, saveFile, updatePage } from "../db";
 import { LiveInput, openPage } from "../ui";
 import DatabaseView from "./database/DatabaseView";
+import { columnDictionary, columnDropCursor, columnSlashItems, withColumns } from "./multiColumn";
 
 const iconOf = (p?: { icon?: string; kind?: string } | null) =>
   p?.icon ?? (p?.kind === "database" ? "🗃️" : "📄");
@@ -136,15 +137,17 @@ const Mention = createReactInlineContentSpec(
   },
 );
 
-export const schema = BlockNoteSchema.create({
-  blockSpecs: {
-    ...defaultBlockSpecs,
-    pageLink: PageLink(),
-    database: InlineDatabase(),
-    callout: Callout(),
-  },
-  inlineContentSpecs: { ...defaultInlineContentSpecs, mention: Mention },
-});
+export const schema = withColumns(
+  BlockNoteSchema.create({
+    blockSpecs: {
+      ...defaultBlockSpecs,
+      pageLink: PageLink(),
+      database: InlineDatabase(),
+      callout: Callout(),
+    },
+    inlineContentSpecs: { ...defaultInlineContentSpecs, mention: Mention },
+  }),
+);
 
 export type AppEditor = typeof schema.BlockNoteEditor;
 
@@ -168,7 +171,8 @@ export default function Editor({
 }) {
   const editor = useCreateBlockNote({
     schema,
-    dictionary: zhTW,
+    dictionary: { ...zhTW, multi_column: columnDictionary },
+    dropCursor: columnDropCursor,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     initialContent: initialContent?.length ? (initialContent as any) : undefined,
     uploadFile: saveFile,
@@ -259,6 +263,7 @@ export default function Editor({
           icon: <Link2 size={18} />,
           onItemClick: () => editor.insertInlineContent("@"),
         },
+        ...columnSlashItems(editor),
         ...getDefaultReactSlashMenuItems(editor),
       ],
       query,

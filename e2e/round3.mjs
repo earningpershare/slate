@@ -231,6 +231,41 @@ await step("page font and small text are per page", async () => {
   assert.equal(await page.locator(".page-body.font-serif").count(), 0);
 });
 
+await step("two-column layout keeps text in each column", async () => {
+  await page.keyboard.press("Alt+n");
+  await page.waitForFunction(() => document.querySelector(".page-title")?.value === "");
+  await page.fill(".page-title", "分欄測試");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("/兩欄");
+  await page.waitForSelector(".bn-suggestion-menu >> text=兩欄");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector('[data-node-type="columnList"] [data-node-type="column"]');
+  assert.equal(await page.locator('[data-node-type="column"]').count(), 2);
+  await page.keyboard.type("左欄文字");
+  await page.locator('[data-node-type="column"]').nth(1).click();
+  await page.keyboard.type("右欄文字");
+  await page.waitForTimeout(800);
+  // side by side: same row, different x
+  const boxes = await page.$$eval('[data-node-type="column"]', (els) =>
+    els.map((e) => {
+      const r = e.getBoundingClientRect();
+      return { x: Math.round(r.x), y: Math.round(r.y), text: e.textContent };
+    }),
+  );
+  assert.equal(boxes[0].y, boxes[1].y);
+  assert.ok(boxes[1].x > boxes[0].x + 100, JSON.stringify(boxes));
+  assert.match(boxes[0].text, /左欄文字/);
+  assert.match(boxes[1].text, /右欄文字/);
+  await shot("r3-06-columns");
+  await page.reload();
+  await page.waitForSelector('[data-node-type="column"] >> text=右欄文字');
+  // column text is searchable
+  await page.keyboard.press("Control+k");
+  await page.fill(".search-input", "右欄文");
+  await page.waitForSelector(".search-row >> text=分欄測試");
+  await page.keyboard.press("Escape");
+});
+
 await step("no console errors", async () => {
   assert.deepEqual(errors, []);
 });
