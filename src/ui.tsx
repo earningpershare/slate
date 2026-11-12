@@ -331,3 +331,20 @@ export function LiveInput({
   };
   return multiline ? <textarea {...props} /> : <input {...props} />;
 }
+
+// ---------- screen size ----------
+
+/** Phones and narrow windows: the sidebar becomes a drawer and a bottom bar appears. */
+export const NARROW = "(max-width: 900px)";
+
+export function useMedia(query: string): boolean {
+  const [on, setOn] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const change = () => setOn(mq.matches);
+    change();
+    mq.addEventListener("change", change);
+    return () => mq.removeEventListener("change", change);
+  }, [query]);
+  return on;
+}

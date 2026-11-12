@@ -1,6 +1,7 @@
 # Slate 離線工作區
 
-完全離線的筆記＋資料庫＋待辦工作區。資料全部存在本機瀏覽器的 IndexedDB，不連任何伺服器。
+筆記＋資料庫＋待辦工作區，電腦和手機都能用，離線也能用。資料存在各裝置瀏覽器的 IndexedDB；
+登入帳號後，同一個帳號的裝置之間會直接互相同步，伺服器不保存任何筆記。
 
 ## 啟動
 
@@ -9,14 +10,51 @@
 ```
 npm install
 npm run build
-npx vite preview --port 5183 --open
+npm start          （= node server/slate-server.mjs，網址 http://localhost:5183）
 ```
 
 需要 Node 20.19 以上（本機系統 Node 是 18，`start.bat` 會自動改用 fnm 裡的 Node 24）。
-第一次開啟後可在瀏覽器網址列按「安裝」變成獨立視窗的應用程式，之後不開伺服器也能離線使用。
+`npm start` 啟動的是完整服務（程式＋帳號＋裝置同步）。只想單機用、不要帳號，也可以用 `npx vite preview --port 5183`
+或把 `dist/` 放到任何靜態空間，那樣設定裡不會出現登入。
 
 開發：`npm run dev`　單元測試：`npm test`
-實機測試：先啟動 preview，再依序跑 `node e2e/smoke.mjs`、`node e2e/round2.mjs`、`node e2e/round3.mjs`
+實機測試：先 `npx vite preview --port 5183`，再跑 `node e2e/smoke.mjs`、`round2.mjs`、`round3.mjs`、`mobile.mjs`（手機尺寸＋觸控）；
+`node e2e/sync.mjs` 會自己啟動一個測試用服務，驗證註冊、登入、兩台裝置互相同步與權限。
+
+## 帳號與跨裝置同步
+
+- 在任一台裝置建立帳號，其他裝置用同一組帳號密碼登入，就會互相同步。不登入也能用，資料只留在那台裝置。
+- **伺服器不存筆記**：它只管登入，並把同一個帳號、同時在線的裝置互相轉送的訊息傳過去，傳完就丟。
+  伺服器上唯一的檔案是 `server-data/accounts.json`（帳號名稱、密碼雜湊、登入狀態），所以不會有雲端空間不夠的問題。
+- 因此**兩台裝置要同時開著 Slate 才會同步**。分開時各改各的，下次同時開啟會自動合併；每分鐘也會自動核對一次。
+- 衝突規則：以「一頁、一筆任務」為單位，兩台都改到同一筆時較晚的修改整筆勝出；改到不同筆互不影響。刪除也照同樣規則。
+- 版本歷史與外觀等設定不同步；附件會同步。
+- 一台裝置只放一個帳號的資料：換帳號登入時會先問要不要清除這台裝置；「登出並清除這台裝置」適合用在別人的裝置上。
+- 沒有「忘記密碼」信件。管理者可在伺服器上執行 `node server/slate-server.mjs passwd <帳號>` 重設，
+  `users` 列出帳號，`remove <帳號>` 刪除帳號。
+
+**放到網路上給別人用**
+
+1. 找一台能跑 Node 的主機，放上這個資料夾，`npm install && npm run build`，用 `npm start` 常駐執行。
+2. 前面一定要有 HTTPS（反向代理或平台代管），並設 `SLATE_SECURE=1`。沒有 HTTPS 的話密碼和筆記會以明文經過網路，
+   手機也無法安裝成 App 或離線使用。走反向代理時加 `SLATE_TRUST_PROXY=1`，並關掉代理對 `/api/relay/events` 的緩衝。
+3. 註冊預設開放。只給認識的人用：`SLATE_SIGNUP=invite` 加 `SLATE_INVITE=<邀請碼>`；完全關閉：`SLATE_SIGNUP=closed`。
+4. 只要備份 `server-data/accounts.json`。
+
+**在自己家裡先試**：電腦執行 `start.bat`，手機連同一個 Wi-Fi 開 `http://<電腦的區網 IP>:5183` 登入即可同步
+（Windows 第一次會問防火牆是否允許，選「私人網路」）。這樣沒有 HTTPS，手機只能在連得到電腦時開啟。
+
+實作：`server/slate-server.mjs`（無相依套件）、`src/lib/account.ts`（登入狀態）、`src/lib/peers.ts`（裝置連線與訊息）、
+`src/lib/sync.ts`（比對與合併，有單元測試）。資料層會自動替每筆寫入蓋上版本 `rev`、刪除留下墓碑（`tombs` 表）。
+
+## 在手機上用
+
+畫面寬度 900px 以下自動切成手機版面：底部導覽列（首頁／搜尋／新頁面／待辦／頁面）、側邊欄變成抽屜、
+選單從底部滑出、待辦清單變成橫向分頁、表格與看板可左右滑動、多欄內容改為上下排列。
+
+- 服務有 HTTPS 時：iPhone 用 Safari「分享 → 加入主畫面」，Android 用 Chrome「安裝應用程式」，之後離線也能開。
+- 手機瀏覽器不支援「自動備份到資料夾」，請定期手動匯出，或靠同步讓電腦那份當備份。
+- 拖曳排序在手機上不可靠，請改用「移動到…」或進卡片裡改欄位。
 
 ## 功能
 
@@ -66,7 +104,8 @@ npx vite preview --port 5183 --open
 ## 授權注意
 
 多欄排版用的 `@blocknote/xl-multi-column` 是「GPL-3.0 或商業授權」，其餘相依套件都是寬鬆授權。
-自己用沒有任何義務；若要把這個程式散布給別人或商用，需先購買 BlockNote 授權，或依
+自己用沒有任何義務；**把服務開給別人用就等於把程式散布給他們**，屆時要嘛依 GPL-3.0 公開整個程式的原始碼、
+要嘛購買 BlockNote 授權、要嘛依
 `src/components/multiColumn.ts` 開頭的說明把它移除（只有那一個檔案用到它）。
 
 ## 快捷鍵
@@ -78,7 +117,9 @@ Ctrl+K 搜尋　Ctrl+\ 收合側邊欄　Alt+N 新頁面　Esc 關閉側邊預�
 - `src/db.ts` 資料表與所有寫入操作
 - `src/lib/logic.ts`、`src/lib/formula.ts` 純邏輯（有單元測試）；`src/db.test.ts` 是資料層測試
 - 改資料庫結構或儲存格時一律用 `mutatePage`／`setRowProp`（讀最新值再改），不要用畫面上的舊值直接覆寫
-- `src/lib/autobackup.ts` 資料夾備份　`src/lib/templates.ts` 範本
+- `src/lib/autobackup.ts` 資料夾備份　`src/lib/templates.ts` 範本　`src/lib/sync.ts`、`peers.ts`、`account.ts` 同步與帳號
+- `server/slate-server.mjs` 服務端（提供程式、帳號、裝置間轉送）
+- `src/styles-mobile.css` 手機與觸控版面（最後載入，覆寫桌機樣式）
 - `src/components/Editor.tsx` 編輯器與自訂區塊
 - `src/components/database/` 資料庫（`DatabaseView` 外殼、`TableView` 表格、`views` 其餘檢視、`PropCell` 儲存格）
 - `src/components/Home.tsx` 首頁

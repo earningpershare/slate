@@ -267,7 +267,8 @@ await step("two-column layout keeps text in each column", async () => {
 });
 
 await step("no console errors", async () => {
-  assert.deepEqual(errors, []);
+  assert.equal(errors.join(" || ").slice(0, 600), "");
 });
 
+if (errors.length) console.log(errors.join(" || ").slice(0, 1500));
 await browser.close();

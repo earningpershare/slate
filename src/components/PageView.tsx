@@ -106,6 +106,20 @@ export default function PageView({
   // after restoring a version the editor is remounted with that version's content
   const [restored, setRestored] = useState<{ n: number; content?: unknown[] }>({ n: 0 });
   const [dialog, setDialog] = useState<"history" | "move" | null>(null);
+  // A change that arrived from another device (new rev, not marked as a local edit):
+  // show it by remounting the editor - unless the user is typing in it right now.
+  const seenRev = useRef<number>();
+  useEffect(() => {
+    if (!page) return;
+    const prev = seenRev.current;
+    seenRev.current = page.rev;
+    if (prev === undefined || page.rev === prev || page.dirty !== 0) return;
+    const editor = editorRef.current;
+    if (!editor || editor.isFocused()) return;
+    if (JSON.stringify(editor.document) === JSON.stringify(page.content ?? [])) return;
+    setRestored((r) => ({ n: r.n + 1, content: page.content }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page?.rev, page?.dirty]);
   const coverStyle = useCoverStyle(page?.cover);
   const parentSchema = page?.isRow ? parent?.schema : undefined;
   const related = useRelated(useMemo(() => parentSchema ?? [], [parentSchema]));

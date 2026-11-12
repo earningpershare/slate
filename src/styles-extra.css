@@ -209,3 +209,16 @@ td:hover .cell-input[type="date"]::-webkit-calendar-picker-indicator,
   .database { padding: 0; }
   :root { --bg: #fff; }
 }
+
+/* accounts */
+.row.wrap { flex-wrap: wrap; }
+.auth-form { display: flex; flex-direction: column; gap: 12px; max-width: 340px; }
+.auth-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.auth-form .input { height: 38px; color: var(--text); }
+.auth-form .seg { align-self: flex-start; }
+.auth-form .btn.primary { height: 38px; justify-content: center; }
+.auth-error { color: var(--danger); font-size: 13px; }
+.welcome { height: 100%; overflow: auto; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 24px; }
+.welcome-card { width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 16px; }
+.welcome-card .brand { font-size: 20px; }
+.welcome-card .btn.ghost { justify-content: center; }

@@ -151,6 +151,17 @@ export const schema = withColumns(
 
 export type AppEditor = typeof schema.BlockNoteEditor;
 
+// The stock translation calls a to-do list "檢查清單"; people look for "待辦".
+const todo = zhTW.slash_menu.check_list;
+const dictionary = {
+  ...zhTW,
+  slash_menu: {
+    ...zhTW.slash_menu,
+    check_list: { ...todo, title: "待辦清單", aliases: [...todo.aliases, "待辦", "待辦清單", "todo", "daiban"] },
+  },
+  multi_column: columnDictionary,
+};
+
 /** Parse Markdown into document blocks (used by import; needs no mounted editor). */
 export function markdownToBlocks(md: string): unknown[] {
   return BlockNoteEditor.create({ schema }).tryParseMarkdownToBlocks(md);
@@ -171,7 +182,7 @@ export default function Editor({
 }) {
   const editor = useCreateBlockNote({
     schema,
-    dictionary: { ...zhTW, multi_column: columnDictionary },
+    dictionary,
     dropCursor: columnDropCursor,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     initialContent: initialContent?.length ? (initialContent as any) : undefined,

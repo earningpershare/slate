@@ -308,7 +308,8 @@ await step("auto-backup writes a dated file into the chosen folder", async () =>
 });
 
 await step("no console errors", async () => {
-  assert.deepEqual(errors, []);
+  assert.equal(errors.join(" || ").slice(0, 600), "");
 });
 
+if (errors.length) console.log(errors.join(" || ").slice(0, 1500));
 await browser.close();

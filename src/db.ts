@@ -1,4 +1,4 @@
-import Dexie, { type Table } from "dexie";
+import Dexie, { type Table, type Transaction } from "dexie";
 import type {
   DbView,
   FocusSession,
@@ -10,6 +10,7 @@ import type {
   StoredFile,
   Task,
   TaskList,
+  Tomb,
 } from "./types";
 import {
   blocksToText,
@@ -22,7 +23,17 @@ import {
   uid,
 } from "./lib/logic";
 
-class AppDB extends Dexie {
+/** Tables whose records travel between devices. History and meta stay local. */
+export const SYNC_TABLES = ["pages", "tasks", "lists", "focus", "habits", "files"] as const;
+export type SyncTable = (typeof SYNC_TABLES)[number];
+
+/** Transactions that apply changes coming from elsewhere: they must not be re-marked as local edits. */
+const quiet = new WeakSet<Transaction>();
+
+/** A rev later than `prev`. The random fraction makes two devices picking the same value practically impossible. */
+export const nextRev = (prev = 0) => Math.max(Date.now(), Math.floor(prev) + 1) + Math.random();
+
+export class AppDB extends Dexie {
   pages!: Table<Page, string>;
   tasks!: Table<Task, string>;
   lists!: Table<TaskList, string>;
@@ -32,9 +43,12 @@ class AppDB extends Dexie {
   history!: Table<Snapshot, string>;
   /** small key/value store for things that are not user content (e.g. the backup folder handle) */
   meta!: Table<{ key: string; value: unknown }, string>;
+  /** deletions waiting to be passed on to other devices */
+  tombs!: Table<Tomb, string>;
+  private tombWrites: Promise<unknown> = Promise.resolve();
 
-  constructor() {
-    super("slate-workspace");
+  constructor(name = "slate-workspace") {
+    super(name);
     this.version(1).stores({
       pages: "id, parentId, updatedAt",
       tasks: "id, listId, parentId, due",
@@ -45,6 +59,74 @@ class AppDB extends Dexie {
     });
     this.version(2).stores({ history: "id, pageId, at" });
     this.version(3).stores({ meta: "key" });
+    // v4: change tracking for sync. Everything that already exists counts as not yet uploaded.
+    this.version(4)
+      .stores({
+        pages: "id, parentId, updatedAt, dirty",
+        tasks: "id, listId, parentId, due, dirty",
+        lists: "id, dirty",
+        focus: "id, taskId, start, dirty",
+        habits: "id, dirty",
+        files: "id, dirty",
+        tombs: "key, dirty",
+      })
+      .upgrade((tx) =>
+        Promise.all(
+          SYNC_TABLES.map((t) =>
+            tx.table(t).toCollection().modify((r: { rev?: number; dirty?: number; updatedAt?: number }) => {
+              r.rev = nextRev(r.updatedAt);
+              r.dirty = 1;
+            }),
+          ),
+        ),
+      );
+    this.trackChanges();
+  }
+
+  /**
+   * Stamp every local write with a new rev and mark it dirty, and leave a
+   * tombstone for every local delete. This is all the sync engine needs, and
+   * it happens here so that no caller can forget it.
+   */
+  private trackChanges() {
+    const pending = new WeakMap<Transaction, Tomb[]>();
+    for (const name of SYNC_TABLES) {
+      const table = this.table(name);
+      table.hook("creating", (_key, obj: { rev?: number; dirty?: number }, tx) => {
+        if (quiet.has(tx)) return;
+        obj.rev = nextRev();
+        obj.dirty = 1;
+      });
+      table.hook("updating", (_mods, _key, obj: { rev?: number }, tx) => {
+        if (quiet.has(tx)) return;
+        return { rev: nextRev(obj.rev), dirty: 1 };
+      });
+      table.hook("deleting", (key, obj: { rev?: number } | undefined, tx) => {
+        if (quiet.has(tx)) return;
+        const tomb: Tomb = { key: name + ":" + key, table: name, id: String(key), rev: nextRev(obj?.rev), dirty: 1 };
+        const list = pending.get(tx);
+        if (list) return void list.push(tomb);
+        const fresh = [tomb];
+        pending.set(tx, fresh);
+        // written once the delete itself has committed (the tombs table is usually not in its scope)
+        tx.on("complete", () => {
+          this.tombWrites = this.tombWrites.then(() => this.tombs.bulkPut(fresh)).catch(() => undefined);
+        });
+      });
+    }
+  }
+
+  /** Resolves once every tombstone for an already-committed delete is stored. */
+  tombsSettled(): Promise<unknown> {
+    return this.tombWrites;
+  }
+
+  /** Run writes that came from another device: they keep their own rev and are not marked dirty. */
+  applyQuietly<T>(tables: Table[], fn: () => Promise<T>): Promise<T> {
+    return this.transaction("rw", tables, (tx) => {
+      quiet.add(tx);
+      return fn();
+    });
   }
 }
 
@@ -521,7 +603,7 @@ export async function seedIfEmpty() {
     content: [{ type: "text", text, styles: {} }],
   });
   const content = [
-    p("這是一個完全離線的工作區，所有資料都只存在這台電腦的瀏覽器裡。"),
+    p("這是一個完全離線的工作區，所有資料都只存在這台裝置的瀏覽器裡。"),
     p("快速上手", "heading", { level: 2 }),
     p("在空白行輸入 / 叫出區塊選單（標題、清單、待辦、表格、圖片、程式碼…）", "bulletListItem"),
     p("輸入 /頁面 或 /資料庫 可在此頁底下建立子頁面", "bulletListItem"),

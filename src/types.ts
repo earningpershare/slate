@@ -81,7 +81,7 @@ export interface DbView {
 
 export type PropValue = string | number | boolean | string[] | null | undefined;
 
-export interface Page {
+export interface Page extends Synced {
   id: string;
   /** "" = top level (IndexedDB cannot index null) */
   parentId: string;
@@ -115,7 +115,28 @@ export interface Page {
 
 export type Repeat = "daily" | "weekdays" | "weekly" | "monthly" | "yearly";
 
-export interface Task {
+/**
+ * Change tracking for sync, filled in automatically by the database layer
+ * (see the hooks in db.ts). Never set these by hand.
+ */
+export interface Synced {
+  /** when this record last changed; the newer rev wins when two devices disagree */
+  rev?: number;
+  /** 1 = changed on this device and not yet uploaded */
+  dirty?: 0 | 1;
+}
+
+/** Remembers that a record was deleted, so the deletion can reach other devices. */
+export interface Tomb {
+  /** "<table>:<id>" */
+  key: string;
+  table: string;
+  id: string;
+  rev: number;
+  dirty: 0 | 1;
+}
+
+export interface Task extends Synced {
   id: string;
   title: string;
   note?: string;
@@ -133,21 +154,21 @@ export interface Task {
   deletedAt?: number | null;
 }
 
-export interface TaskList {
+export interface TaskList extends Synced {
   id: string;
   name: string;
   color: string;
   sort: number;
 }
 
-export interface FocusSession {
+export interface FocusSession extends Synced {
   id: string;
   taskId?: string | null;
   start: number;
   minutes: number;
 }
 
-export interface Habit {
+export interface Habit extends Synced {
   id: string;
   name: string;
   icon: string;
@@ -157,7 +178,7 @@ export interface Habit {
   days: string[];
 }
 
-export interface StoredFile {
+export interface StoredFile extends Synced {
   id: string;
   name: string;
   type: string;

@@ -8,19 +8,26 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["icon.svg"],
+      includeAssets: ["icon.svg", "apple-touch-icon.png"],
       workbox: {
-        globPatterns: ["**/*.{js,css,html,svg,woff,woff2}"],
+        globPatterns: ["**/*.{js,css,html,svg,png,woff,woff2}"],
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
       },
       manifest: {
         name: "Slate 離線工作區",
         short_name: "Slate",
         description: "完全離線的筆記、資料庫與待辦工作區",
-        theme_color: "#2f6f5e",
-        background_color: "#ffffff",
+        theme_color: "#fbfaf7",
+        background_color: "#fbfaf7",
         display: "standalone",
-        icons: [{ src: "icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" }],
+        orientation: "any",
+        // phones need PNG icons; the maskable one has no rounded corners of its own
+        icons: [
+          { src: "icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+          { src: "icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+          { src: "icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+          { src: "icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },
+        ],
       },
     }),
   ],

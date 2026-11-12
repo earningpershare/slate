@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { CheckSquare, Download, PanelLeftOpen, Upload } from "lucide-react";
+import { CheckSquare, Download, House, Menu, PanelLeftOpen, Plus, Search, Upload } from "lucide-react";
 import { createPage, db, exportAll, importAll, seedIfEmpty } from "./db";
 import { Toaster, peek, toast, usePeek } from "./stores";
 import {
@@ -13,7 +13,9 @@ import {
   reallowBackup,
   runBackup,
 } from "./lib/autobackup";
-import { Modal, navigate, openPage, useLocalState, useRoute } from "./ui";
+import { useSession } from "./lib/account";
+import { AccountSection, Welcome } from "./components/Account";
+import { Modal, NARROW, navigate, openPage, useLocalState, useMedia, useRoute } from "./ui";
 import Home from "./components/Home";
 import PageView from "./components/PageView";
 import Sidebar, { pageIcon } from "./components/Sidebar";
@@ -34,27 +36,54 @@ function useDark(theme: Theme): boolean {
   const dark = theme === "dark" || (theme === "system" && systemDark);
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? "dark" : "light";
+    // the phone's status bar / browser toolbar takes the page background colour
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#1b1c1a" : "#fbfaf7");
   }, [dark]);
   return dark;
 }
 
-let seeding: Promise<void> | null = null;
+/** "welcome": a device with no data yet, on a site with accounts - ask before creating anything. */
+let starting: Promise<"ready" | "welcome"> | null = null;
+const localOnly = () => {
+  try {
+    return localStorage.getItem("local-only") === "1";
+  } catch {
+    return false;
+  }
+};
 
 export default function App() {
   const route = useRoute();
   const [theme, setTheme] = useLocalState<Theme>("theme", "system");
-  const [sidebar, setSidebar] = useLocalState("sidebar", true);
+  // Wide screens remember whether the sidebar is pinned open. On a phone it is a
+  // drawer instead: closed by default, and closed again after every navigation.
+  const narrow = useMedia(NARROW);
+  const [pinned, setPinned] = useLocalState("sidebar", true);
+  const [drawer, setDrawer] = useState(false);
+  const sidebar = narrow ? drawer : pinned;
+  const setSidebar = narrow ? setDrawer : setPinned;
   const [sideW, setSideW] = useLocalState("sidebar-width", 252);
   const [dragW, setDragW] = useState<number | null>(null);
   const peekId = usePeek();
   const [search, setSearch] = useState(false);
   const [settings, setSettings] = useState(false);
   const [ready, setReady] = useState(false);
+  const [welcome, setWelcome] = useState(false);
+  const account = useSession();
   const dark = useDark(theme);
 
   useEffect(() => {
-    seeding ??= seedIfEmpty();
-    void seeding.finally(() => setReady(true));
+    starting ??= (async () => {
+      const empty = (await db.pages.count()) === 0 && (await db.tasks.count()) === 0;
+      if (!empty) return "ready";
+      // signed in: the workspace arrives from the other devices, so no sample pages
+      if (account.user) return "ready";
+      if (account.server && !localOnly()) return "welcome";
+      await seedIfEmpty();
+      return "ready";
+    })();
+    void starting.then((s) => (s === "welcome" ? setWelcome(true) : setReady(true)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Automatic folder backup: every few minutes, and when the tab is hidden.
@@ -106,7 +135,32 @@ export default function App() {
 
   // navigating anywhere closes the side peek
   const hash = route.join("/");
-  useEffect(() => peek.close(), [hash]);
+  useEffect(() => {
+    peek.close();
+    setDrawer(false);
+  }, [hash]);
+
+  // Phones: follow the visible viewport so the layout shrinks above the on-screen
+  // keyboard instead of being covered by it.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv || !narrow) return;
+    const root = document.documentElement;
+    const fit = () => {
+      root.style.setProperty("--app-h", Math.round(vv.height) + "px");
+      root.classList.toggle("kbd-open", window.innerHeight - vv.height > 140);
+      if (vv.offsetTop > 0) window.scrollTo(0, 0);
+    };
+    fit();
+    vv.addEventListener("resize", fit);
+    vv.addEventListener("scroll", fit);
+    return () => {
+      vv.removeEventListener("resize", fit);
+      vv.removeEventListener("scroll", fit);
+      root.style.removeProperty("--app-h");
+      root.classList.remove("kbd-open");
+    };
+  }, [narrow]);
 
   const startResize = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -140,26 +194,63 @@ export default function App() {
     })();
   }, [ready, route.length]);
 
+  if (welcome) {
+    return (
+      <Welcome
+        onSignedIn={() => {
+          setWelcome(false);
+          setReady(true);
+        }}
+        onLocalOnly={async () => {
+          try {
+            localStorage.setItem("local-only", "1");
+          } catch {
+            /* ignore */
+          }
+          await seedIfEmpty();
+          setWelcome(false);
+          setReady(true);
+        }}
+      />
+    );
+  }
   if (!ready) return null;
 
   const [section, arg] = route;
   return (
     <div
-      className={"app" + (sidebar ? "" : " no-sidebar") + (dragW ? " resizing" : "")}
-      style={sidebar ? { gridTemplateColumns: `${dragW ?? sideW}px minmax(0, 1fr)` } : undefined}
+      className={"app" + (sidebar ? "" : " no-sidebar") + (dragW ? " resizing" : "") + (narrow ? " narrow" : "")}
+      style={sidebar && !narrow ? { gridTemplateColumns: `${dragW ?? sideW}px minmax(0, 1fr)` } : undefined}
     >
       <FocusTicker />
       <ReminderTicker />
       <Toaster />
-      {sidebar && <div className="side-resize" style={{ left: (dragW ?? sideW) - 3 }} onPointerDown={startResize} />}
+      {sidebar && !narrow && (
+        <div className="side-resize" style={{ left: (dragW ?? sideW) - 3 }} onPointerDown={startResize} />
+      )}
+      {sidebar && narrow && <div className="scrim" onClick={() => setDrawer(false)} />}
       {sidebar && (
-        <Sidebar
-          currentId={section === "p" ? arg : undefined}
-          section={section}
-          onSearch={() => setSearch(true)}
-          onSettings={() => setSettings(true)}
-          onCollapse={() => setSidebar(false)}
-        />
+        <div
+          className="side-wrap"
+          onClick={(e) => {
+            // tapping the page you are already on changes no route, so close the drawer here
+            if (narrow && (e.target as HTMLElement).closest(".tree-main, .nav-row:not([aria-expanded])")) setDrawer(false);
+          }}
+        >
+          <Sidebar
+            currentId={section === "p" ? arg : undefined}
+            section={section}
+            onSearch={() => {
+              setDrawer(false);
+              setSearch(true);
+            }}
+            onSettings={() => {
+              setDrawer(false);
+              setSettings(true);
+            }}
+            onCollapse={() => setSidebar(false)}
+          />
+        </div>
       )}
       <main className="main">
         {section === "p" && arg ? (
@@ -185,6 +276,29 @@ export default function App() {
           </div>
         ) : null}
       </main>
+      {narrow && (
+        <nav className="tabbar" aria-label="主要導覽">
+          <button className={section === "home" ? "active" : ""} onClick={() => navigate("/home")}>
+            <House size={21} />
+            <span>首頁</span>
+          </button>
+          <button onClick={() => setSearch(true)}>
+            <Search size={21} />
+            <span>搜尋</span>
+          </button>
+          <button className="tab-new" aria-label="新頁面" onClick={async () => openPage(await createPage(null))}>
+            <Plus size={22} />
+          </button>
+          <button className={section === "tasks" ? "active" : ""} onClick={() => navigate("/tasks/today")}>
+            <CheckSquare size={21} />
+            <span>待辦</span>
+          </button>
+          <button className={drawer ? "active" : ""} onClick={() => setDrawer((d) => !d)}>
+            <Menu size={21} />
+            <span>頁面</span>
+          </button>
+        </nav>
+      )}
       {peekId && (
         <aside className="peek" aria-label="頁面預覽">
           <PageView key={peekId} id={peekId} dark={dark} mode="peek" />
@@ -380,7 +494,7 @@ function SettingsModal({
 
       <h3>手動備份</h3>
       <p className="muted">
-        所有資料只存在這台電腦的這個瀏覽器裡{usage && `（目前約 ${usage}）`}。清除瀏覽器資料會一併清掉，請定期匯出備份。
+        所有資料只存在這台裝置的這個瀏覽器裡{usage && `（目前約 ${usage}）`}。清除瀏覽器資料會一併清掉，請定期匯出備份。
       </p>
       <div className="row">
         <button className="btn primary" onClick={() => void doExport()}>
@@ -398,7 +512,7 @@ function SettingsModal({
 
       <h3>自動備份到資料夾</h3>
       {!backupSupported() ? (
-        <p className="muted">這個瀏覽器不支援寫入資料夾，請改用 Edge 或 Chrome，或定期手動匯出。</p>
+        <p className="muted">這個瀏覽器不支援寫入資料夾（手機瀏覽器都不支援；電腦請用 Edge 或 Chrome），請定期手動匯出。</p>
       ) : auto.dir ? (
         <>
           <p className="muted">
@@ -457,6 +571,9 @@ function SettingsModal({
           </button>
         </div>
       )}
+
+      <h3>跨裝置同步</h3>
+      <AccountSection onMessage={setMsg} />
 
       <h3>儲存保護</h3>
       {persisted ? (
