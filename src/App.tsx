@@ -13,8 +13,8 @@ import {
   reallowBackup,
   runBackup,
 } from "./lib/autobackup";
-import { useSession } from "./lib/account";
-import { AccountSection, Welcome } from "./components/Account";
+import { rememberSeed } from "./lib/link";
+import { SyncSection } from "./components/DeviceSync";
 import { Modal, NARROW, navigate, openPage, useLocalState, useMedia, useRoute } from "./ui";
 import Home from "./components/Home";
 import PageView from "./components/PageView";
@@ -42,15 +42,7 @@ function useDark(theme: Theme): boolean {
   return dark;
 }
 
-/** "welcome": a device with no data yet, on a site with accounts - ask before creating anything. */
-let starting: Promise<"ready" | "welcome"> | null = null;
-const localOnly = () => {
-  try {
-    return localStorage.getItem("local-only") === "1";
-  } catch {
-    return false;
-  }
-};
+let starting: Promise<void> | null = null;
 
 export default function App() {
   const route = useRoute();
@@ -68,21 +60,14 @@ export default function App() {
   const [search, setSearch] = useState(false);
   const [settings, setSettings] = useState(false);
   const [ready, setReady] = useState(false);
-  const [welcome, setWelcome] = useState(false);
-  const account = useSession();
   const dark = useDark(theme);
 
   useEffect(() => {
     starting ??= (async () => {
-      const empty = (await db.pages.count()) === 0 && (await db.tasks.count()) === 0;
-      if (!empty) return "ready";
-      // signed in: the workspace arrives from the other devices, so no sample pages
-      if (account.user) return "ready";
-      if (account.server && !localOnly()) return "welcome";
-      await seedIfEmpty();
-      return "ready";
+      // remembered so that linking a still-untouched device does not leave the sample pages twice
+      if (await seedIfEmpty()) await rememberSeed(db);
     })();
-    void starting.then((s) => (s === "welcome" ? setWelcome(true) : setReady(true)));
+    void starting.then(() => setReady(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -194,26 +179,6 @@ export default function App() {
     })();
   }, [ready, route.length]);
 
-  if (welcome) {
-    return (
-      <Welcome
-        onSignedIn={() => {
-          setWelcome(false);
-          setReady(true);
-        }}
-        onLocalOnly={async () => {
-          try {
-            localStorage.setItem("local-only", "1");
-          } catch {
-            /* ignore */
-          }
-          await seedIfEmpty();
-          setWelcome(false);
-          setReady(true);
-        }}
-      />
-    );
-  }
   if (!ready) return null;
 
   const [section, arg] = route;
@@ -573,7 +538,7 @@ function SettingsModal({
       )}
 
       <h3>跨裝置同步</h3>
-      <AccountSection onMessage={setMsg} />
+      <SyncSection onMessage={setMsg} />
 
       <h3>儲存保護</h3>
       {persisted ? (

@@ -3,4 +3,3 @@ dist
 dev-dist
 *.log
 graphify-out
-server-data

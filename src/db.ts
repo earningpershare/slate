@@ -595,8 +595,9 @@ export async function importAll(json: string) {
 
 // ---------- first run ----------
 
-export async function seedIfEmpty() {
-  if ((await db.pages.count()) > 0 || (await db.tasks.count()) > 0) return;
+/** Fill a brand-new workspace with sample content. Resolves to true if it did. */
+export async function seedIfEmpty(): Promise<boolean> {
+  if ((await db.pages.count()) > 0 || (await db.tasks.count()) > 0) return false;
   const p = (text: string, type = "paragraph", props = {}) => ({
     type,
     props,
@@ -635,4 +636,5 @@ export async function seedIfEmpty() {
   }
   await addTask({ title: "逛逛這個工作區", due: d, priority: 2 });
   await addTask({ title: "到設定匯出一次備份", due: d });
+  return true;
 }

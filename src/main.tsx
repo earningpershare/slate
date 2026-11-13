@@ -5,7 +5,7 @@ import "dayjs/locale/zh-tw";
 import { registerSW } from "virtual:pwa-register";
 import App from "./App";
 import { db } from "./db";
-import { start } from "./lib/account";
+import { startLink } from "./lib/link";
 import "./styles.css";
 import "./styles-extra.css";
 import "./styles-mobile.css";
@@ -13,11 +13,11 @@ import "./styles-mobile.css";
 dayjs.locale("zh-tw");
 registerSW({ immediate: true });
 
-// who is signed in (if this address offers accounts at all) is known before the first render
-void start(db).then(() => {
-  ReactDOM.createRoot(document.getElementById("root")!).render(
-    <React.StrictMode>
-      <App />
-    </React.StrictMode>,
-  );
-});
+// reconnect to the devices this one is linked with, if any
+void startLink(db);
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+);

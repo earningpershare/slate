@@ -4,6 +4,8 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
+  // relative, so the build works from any address, including a sub-path like user.github.io/slate/
+  base: "./",
   plugins: [
     react(),
     VitePWA({
@@ -16,7 +18,7 @@ export default defineConfig({
       manifest: {
         name: "Slate 離線工作區",
         short_name: "Slate",
-        description: "完全離線的筆記、資料庫與待辦工作區",
+        description: "離線的筆記、資料庫與待辦工作區，用連結碼在裝置之間直接同步",
         theme_color: "#fbfaf7",
         background_color: "#fbfaf7",
         display: "standalone",

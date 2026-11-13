@@ -1,5 +1,5 @@
-// Sync between the devices of one account. Devices talk to each other directly
-// (through the relay in lib/peers.ts); nothing here stores data anywhere else.
+// Sync between linked devices. Devices talk to each other directly
+// (see lib/link.ts); nothing here stores data anywhere else.
 //
 // How two devices get in step:
 //   1. each sends the other its manifest: for every record, just its id and rev
@@ -156,7 +156,7 @@ export async function reconcile(a: AppDB, b: AppDB) {
   return { toA: await applyChanges(a, toA), toB: await applyChanges(b, toB) };
 }
 
-/** Remove everything from this device (used when a different account takes it over). */
+/** Remove everything from this device, leaving no deletions behind to sync. */
 export async function wipeLocal(db: AppDB) {
   await db.tombsSettled();
   const tables = [...SYNC_TABLES.map((t) => db.table(t)), db.tombs, db.history];

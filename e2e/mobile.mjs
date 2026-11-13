@@ -217,7 +217,7 @@ await step("settings sheet shows the sync section", async () => {
   await tab("頁面").tap();
   await page.locator(".sidebar .nav-row", { hasText: "設定" }).tap();
   await page.waitForSelector(".modal.settings >> text=跨裝置同步");
-  await page.waitForSelector(".modal.settings >> text=這個網址沒有提供帳號服務");
+  await page.waitForSelector(".modal.settings >> text=顯示連結碼");
   await shot("m-10-settings");
   await page.locator(".modal .btn", { hasText: "完成" }).tap();
 });

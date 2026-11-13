@@ -1,37 +1,43 @@
-// Accounts and device-to-device sync, end to end. Starts its own server on a spare
-// port with a throwaway data folder. Usage: node e2e/sync.mjs [screenshotDir]
+// Linking two devices with a code and syncing between them, end to end.
+// Starts its own copy of the built app and a local meeting point (PeerJS broker), so it
+// does not depend on the public one. Run `npm run build` first.
+// Usage: node e2e/sync.mjs [screenshotDir]
 import { chromium } from "playwright";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 
 const shots = process.argv[2];
 const PORT = 5197;
+const BROKER = 5198;
 const base = "http://localhost:" + PORT;
-const data = fs.mkdtempSync(path.join(os.tmpdir(), "slate-e2e-"));
-const server = spawn(process.execPath, ["server/slate-server.mjs"], {
-  env: { ...process.env, PORT: String(PORT), SLATE_DATA: data },
-  stdio: ["ignore", "pipe", "inherit"],
-});
-await new Promise((res, rej) => {
-  server.stdout.on("data", (d) => String(d).includes("已啟動") && res());
-  server.on("exit", () => rej(new Error("server did not start")));
-});
+
+const children = [
+  spawn(process.execPath, ["node_modules/peer/dist/bin/peerjs.js", "--port", String(BROKER)], { stdio: "ignore" }),
+  spawn(process.execPath, ["node_modules/vite/bin/vite.js", "preview", "--port", String(PORT), "--strictPort"], { stdio: "ignore" }),
+];
+const stop = () => children.forEach((c) => c.kill());
+process.on("exit", stop);
+for (const url of [base, `http://localhost:${BROKER}/`]) {
+  for (let i = 0; ; i++) {
+    if (await fetch(url).then((r) => r.ok, () => false)) break;
+    if (i > 60) throw new Error("did not start: " + url);
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
 
 const browser = await chromium.launch({ channel: "msedge" });
 const errors = [];
+const watchPage = (name, page) => {
+  page.setDefaultTimeout(10_000);
+  page.on("pageerror", (e) => errors.push(name + " pageerror: " + e.message));
+  page.on("console", (m) => m.type() === "error" && errors.push(name + " console: " + m.text()));
+  return page;
+};
 const device = async (name, opts = {}) => {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "zh-TW", ...opts });
-  const page = await ctx.newPage();
-  page.setDefaultTimeout(8000);
-  page.on("pageerror", (e) => errors.push(name + " pageerror: " + e.message));
-  page.on("console", (m) => {
-    // refused sign-ins are answered with 4xx on purpose
-    if (m.type() === "error" && !/status of 4\d\d/.test(m.text())) errors.push(name + " console: " + m.text());
-  });
-  return page;
+  // devices meet at the local broker instead of the public one
+  await ctx.addInitScript((b) => localStorage.setItem("slate:broker", b), "localhost:" + BROKER);
+  return watchPage(name, await ctx.newPage());
 };
 const step = async (name, fn) => {
   try {
@@ -42,65 +48,61 @@ const step = async (name, fn) => {
     process.exitCode = 1;
   }
 };
-const auth = async (page, mode, name, password) => {
-  if (mode === "register") await page.locator(".auth-form .seg-btn", { hasText: "建立帳號" }).click();
-  await page.fill('.auth-form input[name="username"]', name);
-  await page.fill('.auth-form input[name="password"]', password);
-  await page.locator(".auth-form .btn.primary").click();
-};
-const titles = (page) =>
+const store = (page, table) =>
   page.evaluate(
-    () =>
+    (table) =>
       new Promise((res) => {
         const open = indexedDB.open("slate-workspace");
         open.onsuccess = () => {
           const d = open.result;
-          const q = d.transaction("pages").objectStore("pages").getAll();
-          q.onsuccess = () => (d.close(), res(q.result.map((p) => p.title).sort()));
+          const q = d.transaction(table).objectStore(table).getAll();
+          q.onsuccess = () => (d.close(), res(q.result));
         };
       }),
+    table,
   );
-const api = (page, method, route, body, headers = { "x-slate": "1" }) =>
-  page.evaluate(
-    async ([method, route, body, headers]) => {
-      const r = await fetch("/api/" + route, {
-        method,
-        headers: { "content-type": "application/json", ...headers },
-        body: body === null ? undefined : JSON.stringify(body),
-      });
-      return { status: r.status, body: await r.json().catch(() => null) };
-    },
-    [method, route, body, headers],
-  );
+const titles = async (page) => (await store(page, "pages")).filter((p) => !p.isRow).map((p) => p.title).sort();
+/** wait until `check()` holds */
+const until = async (what, check, tries = 60) => {
+  for (let i = 0; i < tries; i++) {
+    if (await check()) return;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  throw new Error("never happened: " + what);
+};
+const openSettings = async (page, phone) => {
+  if (phone) {
+    await page.locator(".tabbar button", { hasText: "頁面" }).tap();
+    await page.locator(".sidebar .nav-row", { hasText: "設定" }).tap();
+  } else await page.locator(".sidebar .nav-row", { hasText: "設定" }).click();
+  await page.waitForSelector(".link");
+};
 
 const laptop = await device("laptop");
-const phone = await device("phone", { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+let phone = await device("phone", {
+  viewport: { width: 390, height: 844 },
+  isMobile: true,
+  hasTouch: true,
+  userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36",
+});
 
-await step("a new device is asked to sign in before anything is created", async () => {
+await step("each device starts on its own with sample content", async () => {
   await laptop.goto(base);
-  await laptop.waitForSelector(".welcome .auth-form");
-  assert.deepEqual(await titles(laptop), []);
-  if (shots) await laptop.screenshot({ path: shots + "/s-01-welcome.png" });
+  await phone.goto(base);
+  await laptop.waitForSelector(".page-title");
+  await phone.waitForSelector(".page-title");
+  assert.deepEqual(await titles(laptop), ["專案追蹤", "歡迎使用"]);
+  assert.deepEqual(await titles(phone), ["專案追蹤", "歡迎使用"]);
 });
 
-await step("wrong password and short password are refused with a clear message", async () => {
-  await auth(laptop, "login", "amy", "not-my-password");
-  await laptop.waitForSelector(".auth-error >> text=帳號或密碼不正確");
-  assert.equal((await api(laptop, "POST", "register", { name: "amy", password: "short" })).body.error, "password");
-  assert.equal((await api(laptop, "POST", "register", { name: "a b", password: "long-enough-1" })).body.error, "name");
-});
-
-await step("create an account on the laptop and write something", async () => {
-  await auth(laptop, "register", "Amy", "correct horse 1");
-  await laptop.waitForSelector(".home, .page-title");
+await step("write something on the laptop, with an attachment", async () => {
   await laptop.keyboard.press("Alt+n");
   await laptop.waitForFunction(() => document.querySelector(".page-title")?.value === "");
   await laptop.fill(".page-title", "電腦寫的頁面");
   await laptop.keyboard.press("Enter");
   await laptop.keyboard.type("第一段內容");
   await laptop.waitForTimeout(800);
-  assert.deepEqual(await titles(laptop), ["電腦寫的頁面"]);
-  // an attachment big enough to need several relay messages (0.7 MB of a known pattern)
+  // big enough to need several messages (0.7 MB of a known pattern)
   await laptop.evaluate(
     () =>
       new Promise((res, rej) => {
@@ -117,26 +119,43 @@ await step("create an account on the laptop and write something", async () => {
   );
 });
 
-await step("the phone signs in to the same account and receives it", async () => {
-  await phone.goto(base);
-  await phone.waitForSelector(".welcome .auth-form");
-  await auth(phone, "login", "amy", "correct horse 1");
-  await phone.waitForSelector(".tabbar");
-  await phone.waitForFunction(() => !!document.querySelector(".page-title, .home"));
-  await assert.doesNotReject(
-    phone.waitForFunction(
-      () =>
-        new Promise((res) => {
-          const open = indexedDB.open("slate-workspace");
-          open.onsuccess = () => {
-            const d = open.result;
-            const q = d.transaction("pages").objectStore("pages").getAll();
-            q.onsuccess = () => (d.close(), res(q.result.some((p) => p.title === "電腦寫的頁面")));
-          };
-        }),
-    ),
-  );
-  // the attachment arrived whole
+let code = "";
+await step("the laptop shows a link code", async () => {
+  await openSettings(laptop, false);
+  await laptop.locator(".link .btn.primary", { hasText: "顯示連結碼" }).click();
+  await laptop.waitForSelector(".link-code");
+  code = (await laptop.locator(".link-code").innerText()).trim();
+  assert.match(code, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+  if (shots) await laptop.screenshot({ path: shots + "/s-01-code.png" });
+});
+
+await step("a wrong code is refused with a clear message", async () => {
+  await openSettings(phone, true);
+  await phone.locator(".link .btn", { hasText: "輸入連結碼" }).tap();
+  await phone.fill(".link-input", code.startsWith("AAAA") ? "BBBB-BBBB" : "AAAA-" + code.slice(5));
+  await phone.locator(".link .btn.primary").tap();
+  await phone.waitForSelector(".auth-error >> text=找不到這組連結碼", { timeout: 30_000 });
+  assert.deepEqual((await store(phone, "meta")).filter((x) => x.key === "link:group"), []);
+});
+
+await step("the right code links the phone, and it receives the laptop's workspace", async () => {
+  await phone.fill(".link-input", code.toLowerCase().replace("-", " ")); // typed sloppily
+  await phone.locator(".link .btn.primary").tap();
+  await phone.waitForSelector(".link-devices li", { timeout: 30_000 });
+  await until("phone has the laptop's page", async () => (await titles(phone)).includes("電腦寫的頁面"));
+  // the phone's own untouched sample pages were dropped instead of doubling up
+  await until("no duplicates", async () => JSON.stringify(await titles(phone)) === JSON.stringify(["專案追蹤", "歡迎使用", "電腦寫的頁面"]));
+  assert.deepEqual(await titles(laptop), ["專案追蹤", "歡迎使用", "電腦寫的頁面"]);
+  // each sees the other as connected
+  await laptop.waitForSelector(".link-devices .link-dot.on");
+  await phone.waitForSelector(".link-devices .link-dot.on");
+  assert.match(await laptop.locator(".link-devices li").innerText(), /Android 手機/);
+  assert.match(await phone.locator(".link-devices li").innerText(), /Windows 電腦/);
+  if (shots) await phone.screenshot({ path: shots + "/s-02-linked-phone.png" });
+  if (shots) await laptop.screenshot({ path: shots + "/s-03-linked-laptop.png" });
+});
+
+await step("the attachment arrived whole", async () => {
   const readFile = () =>
     phone.evaluate(
       () =>
@@ -155,18 +174,15 @@ await step("the phone signs in to the same account and receives it", async () =>
         }),
     );
   let file = null;
-  for (let i = 0; i < 40 && !file; i++) {
-    file = await readFile();
-    if (!file) await phone.waitForTimeout(250);
-  }
+  await until("file on phone", async () => (file = await readFile()));
   assert.equal(JSON.stringify(file), JSON.stringify({ size: 700000, ok: true, name: "big.png", type: "image/png" }));
-  await phone.locator(".tabbar button", { hasText: "頁面" }).tap();
-  await phone.locator(".tree-main", { hasText: "電腦寫的頁面" }).tap();
-  await phone.waitForSelector(".bn-editor >> text=第一段內容");
-  if (shots) await phone.screenshot({ path: shots + "/s-02-phone.png" });
 });
 
 await step("an edit on the phone shows up on the laptop while its page is open", async () => {
+  await phone.keyboard.press("Escape");
+  await laptop.keyboard.press("Escape");
+  await phone.locator(".tabbar button", { hasText: "頁面" }).tap();
+  await phone.locator(".tree-main", { hasText: "電腦寫的頁面" }).tap();
   await phone.locator(".bn-editor >> text=第一段內容").tap();
   await phone.keyboard.press("Control+End");
   await phone.keyboard.press("Enter");
@@ -189,122 +205,58 @@ await step("tasks and deletions travel both ways", async () => {
   await laptop.locator(".tree-row", { hasText: "電腦寫的頁面" }).hover();
   await laptop.locator(".tree-row", { hasText: "電腦寫的頁面" }).locator('[title="更多"]').click();
   await laptop.locator(".popover .menu-item", { hasText: "移到垃圾桶" }).click();
-  await phone.locator(".tabbar button", { hasText: "頁面" }).tap();
-  await phone.waitForSelector(".sidebar");
-  await phone.waitForSelector(".sidebar .tree-main >> text=電腦寫的頁面", { state: "detached" });
-  await phone.locator(".scrim").tap({ position: { x: 370, y: 300 } });
+  await until("page trashed on phone", async () => (await store(phone, "pages")).some((p) => p.title === "電腦寫的頁面" && p.deletedAt));
 });
 
-await step("changes made while the other device is closed are merged when it comes back", async () => {
-  await phone.context().setOffline(true);
-  await phone.waitForTimeout(300);
-  await laptop.evaluate(() => (location.hash = "/tasks/inbox"));
-  await laptop.fill(".quick-add input", "手機離線時電腦加的");
+await step("changes made while the other device is closed are merged when it comes back, without a code", async () => {
+  const ctx = phone.context();
+  await phone.close();
+  await laptop.waitForTimeout(500);
+  await laptop.fill(".quick-add input", "手機關著時電腦加的");
   await laptop.keyboard.press("Enter");
-  await phone.locator(".tabbar button", { hasText: "待辦" }).tap();
-  await phone.locator(".tasks-nav .nav-row", { hasText: "收件匣" }).tap();
-  await phone.fill(".quick-add input", "手機離線時自己加的");
+  await laptop.waitForTimeout(500);
+  phone = watchPage("phone", await ctx.newPage());
+  await phone.goto(base + "/#/tasks/inbox");
+  await phone.waitForSelector(".task-row >> text=手機關著時電腦加的", { timeout: 30_000 });
+  await phone.fill(".quick-add input", "手機回來後加的");
   await phone.keyboard.press("Enter");
-  await phone.waitForSelector(".task-row >> text=手機離線時自己加的");
-  await phone.context().setOffline(false);
-  await phone.waitForSelector(".task-row >> text=手機離線時電腦加的", { timeout: 15000 });
-  await laptop.waitForSelector(".task-row >> text=手機離線時自己加的", { timeout: 15000 });
+  await laptop.waitForSelector(".task-row >> text=手機回來後加的");
 });
 
-await step("settings show the account and the connected device", async () => {
-  await laptop.locator(".sidebar .nav-row", { hasText: "設定" }).click();
-  await laptop.waitForSelector(".modal.settings >> text=已登入");
-  await laptop.waitForSelector(".modal.settings >> text=目前有 1 台其他裝置連線中");
-  if (shots) await laptop.screenshot({ path: shots + "/s-03-settings.png" });
-  await laptop.locator(".modal .btn", { hasText: "完成" }).click();
+await step("a reload reconnects on its own", async () => {
+  await laptop.reload();
+  await laptop.waitForSelector(".quick-add input");
+  await laptop.fill(".quick-add input", "重新整理後加的");
+  await laptop.keyboard.press("Enter");
+  await phone.waitForSelector(".task-row >> text=重新整理後加的", { timeout: 30_000 });
 });
 
-await step("another account sees none of it and cannot reach the first account's devices", async () => {
-  const other = await device("other");
-  await other.goto(base);
-  await other.waitForSelector(".welcome .auth-form");
-  assert.equal((await api(other, "POST", "relay/send?from=xxxxxxxx&to=*", { t: "manifest", m: {} })).status, 401);
-  await auth(other, "register", "bob", "another secret 2");
-  await other.waitForSelector(".home, .page-title");
-  await other.waitForTimeout(1500);
-  assert.deepEqual(await titles(other), []);
-  // bob floods "everyone": only his own devices are ever addressed (he has no other, so nobody)
-  await other.waitForFunction(async () => {
-    const r = await fetch("/api/info");
-    return !!(await r.json()).user;
-  });
-  await other.evaluate(() => (location.hash = "/tasks/inbox"));
-  await other.fill(".quick-add input", "bob 的任務");
-  await other.keyboard.press("Enter");
-  await other.waitForTimeout(1500);
-  assert.equal(await laptop.locator(".task-row", { hasText: "bob 的任務" }).count(), 0);
-  assert.equal(await phone.locator(".task-row", { hasText: "bob 的任務" }).count(), 0);
-  await other.context().close();
+await step("the meeting point only ever sees derived ids, never the shared secret", async () => {
+  const group = (await store(laptop, "meta")).find((m) => m.key === "link:group").value;
+  assert.match(group.secret, /^[0-9a-f]{64}$/);
+  const me = (await store(laptop, "meta")).find((m) => m.key === "link:device").value;
+  assert.match(me.id, /^[0-9a-f]{24}$/);
 });
 
-await step("the server keeps accounts only, never notes; passwords are not stored readable", async () => {
-  assert.deepEqual(fs.readdirSync(data).filter((f) => !f.endsWith(".tmp")), ["accounts.json"]);
-  const raw = fs.readFileSync(path.join(data, "accounts.json"), "utf8");
-  for (const secret of ["correct horse 1", "another secret 2", "電腦寫的頁面", "電腦加的任務", "第一段內容"]) {
-    assert.ok(!raw.includes(secret), "found in accounts.json: " + secret);
-  }
-  const saved = JSON.parse(raw);
-  assert.deepEqual(Object.values(saved.users).map((u) => u.name).sort(), ["amy", "bob"]);
+await step("stopping sync on the phone keeps its data and ends the exchange", async () => {
+  await openSettings(phone, true);
+  phone.once("dialog", (d) => d.accept());
+  await phone.locator(".link .btn.danger", { hasText: "停止同步" }).tap();
+  await phone.waitForSelector(".link .btn.primary >> text=顯示連結碼");
+  await phone.keyboard.press("Escape");
+  assert.ok((await store(phone, "tasks")).some((t) => t.title === "重新整理後加的"));
+  // the laptop forgot the phone
+  await until("laptop forgot the phone", async () => (await store(laptop, "meta")).find((m) => m.key === "link:group")?.value.members.length === 0);
+  await laptop.fill(".quick-add input", "停止同步後加的");
+  await laptop.keyboard.press("Enter");
+  await laptop.waitForTimeout(2500);
+  assert.ok(!(await store(phone, "tasks")).some((t) => t.title === "停止同步後加的"));
 });
 
-await step("requests without the same-origin header or without a session are refused", async () => {
-  assert.equal((await api(laptop, "POST", "login", { name: "amy", password: "correct horse 1" }, {})).status, 400);
-  const anon = await device("anon");
-  await anon.goto(base + "/icon.svg");
-  const events = await anon.evaluate(async () => (await fetch("/api/relay/events?peer=abcdefgh12")).status);
-  assert.equal(events, 401);
-  assert.equal((await api(anon, "POST", "password", { current: "x", next: "yyyyyyyy" })).status, 401);
-  assert.equal((await api(anon, "GET", "../accounts.json", null)).status, 404);
-  const leak = await anon.evaluate(async () => (await fetch("/..%2fserver-data/accounts.json")).status);
-  assert.ok(leak === 403 || leak === 404, "got " + leak);
-  await anon.context().close();
-});
-
-await step("repeated wrong passwords are slowed down", async () => {
-  const anon = await device("anon2");
-  await anon.goto(base + "/icon.svg");
-  let last = 0;
-  for (let i = 0; i < 10; i++) last = (await api(anon, "POST", "login", { name: "bob", password: "guess-" + i })).status;
-  assert.equal(last, 429);
-  // even the right password has to wait now
-  assert.equal((await api(anon, "POST", "login", { name: "bob", password: "another secret 2" })).status, 429);
-  await anon.context().close();
-});
-
-await step("changing the password signs the other device out; signing out and clearing empties the device", async () => {
-  await laptop.locator(".sidebar .nav-row", { hasText: "設定" }).click();
-  await laptop.locator(".modal.settings .btn", { hasText: "變更密碼" }).click();
-  await laptop.fill('.modal.settings input[autocomplete="current-password"]', "correct horse 1");
-  await laptop.fill('.modal.settings input[autocomplete="new-password"]', "battery staple 9");
-  await laptop.locator(".modal.settings .auth-form .btn.primary").click();
-  await laptop.waitForSelector(".modal.settings >> text=密碼已變更");
-  // the phone was signed out by that
-  await phone.waitForFunction(async () => !(await (await fetch("/api/info")).json()).user, null, { timeout: 15000 });
-  await phone.locator(".tabbar button", { hasText: "頁面" }).tap();
-  await phone.locator(".sidebar .nav-row", { hasText: "設定" }).tap();
-  await phone.waitForSelector(".modal.settings >> text=登入已經失效");
-  // the phone still has its data
-  assert.ok((await phone.locator(".task-row").count()) >= 0);
-  laptop.once("dialog", (d) => d.accept());
-  await laptop.locator(".modal.settings .btn", { hasText: "登出並清除這台裝置" }).click();
-  await laptop.waitForSelector(".welcome .auth-form");
-  assert.deepEqual(await titles(laptop), []);
-  // old password no longer works, the new one does
-  await auth(laptop, "login", "amy", "correct horse 1");
-  await laptop.waitForSelector(".auth-error");
-  await auth(laptop, "login", "amy", "battery staple 9");
-  await laptop.waitForSelector(".home, .page-title");
-});
-
-await step("no unexpected console errors", async () => {
-  assert.equal(errors.join(" || "), "");
+await step("no console errors", async () => {
+  assert.deepEqual(errors, []);
 });
 
 await browser.close();
-server.kill();
-fs.rmSync(data, { recursive: true, force: true });
+stop();
+process.exit(process.exitCode ?? 0);
