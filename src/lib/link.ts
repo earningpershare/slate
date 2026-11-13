@@ -21,6 +21,12 @@
 //   { t: "rekey", secret, members }            a device was removed: the group moved to a new
 //                                              secret, which the removed device never gets
 //
+//   { t: "ping" }                              still here (sent every 20 s; silence for 50 s
+//                                              means the other side is gone)
+//   { t: "close" }                             I am closing this connection. Said out loud,
+//                                              because the other end of a WebRTC channel does
+//                                              not always notice a close by itself.
+//
 // Who may connect: only a device whose id is in the local member list. Ids get there by
 // pairing with a code, or by being named by a device that is already a member.
 import { liveQuery } from "dexie";
@@ -44,6 +50,8 @@ type Msg =
   | { t: "changes"; changes: SyncChange[] }
   | { t: "file"; change: SyncChange; i: number; n: number; data: string }
   | { t: "bye"; device: string }
+  | { t: "ping" }
+  | { t: "close" }
   | { t: "members"; members: Device[] }
   | { t: "rekey"; secret: string; members: Device[] }
   | { t: "join"; device: Device }
@@ -182,6 +190,19 @@ async function sendSealed(conn: DataConnection, key: CryptoKey, msg: Msg) {
   await conn.send(data);
 }
 
+/** Set localStorage "slate:debug" to see what the link is doing in the console. */
+let debugging: boolean | null = null;
+const log = (...a: unknown[]) => {
+  if (debugging === null) {
+    try {
+      debugging = !!localStorage.getItem("slate:debug");
+    } catch {
+      debugging = false;
+    }
+  }
+  if (debugging) console.debug("link:", ...a);
+};
+
 // ---------- state ----------
 
 let db: AppDB;
@@ -200,6 +221,10 @@ interface Live {
   conn: DataConnection;
   dialer: string; // id of the device that opened this connection
   send(msg: Msg): Promise<void>;
+  /** announce the close to the other end, then close */
+  hangUp(): void;
+  /** when something last arrived on it */
+  heard(): number;
 }
 const conns = new Map<string, Live>(); // by device id; only devices that proved they hold the key
 const dialing = new Set<string>();
@@ -261,6 +286,7 @@ async function mergeMembers(found: Device[]) {
 const post = async (to: string, msg: Msg): Promise<number> => {
   const targets = to === "*" ? [...conns.values()] : conns.has(to) ? [conns.get(to)!] : [];
   let delivered = 0;
+  if (msg.t !== "ping") log("post", msg.t, "to", to.slice(0, 6), "targets", targets.length);
   for (const t of targets) {
     try {
       await t.send(msg);
@@ -303,6 +329,8 @@ async function sendChanges(to: string, changes: SyncChange[]): Promise<boolean> 
 }
 
 async function onMessage(from: string, msg: Msg) {
+  if (msg.t === "ping") return;
+  log("got", msg.t, "from", from.slice(0, 6));
   if (msg.t === "manifest") {
     // the other device told us what it has: give it whatever it lacks
     const changes = await newerThan(db, msg.m);
@@ -322,14 +350,16 @@ async function onMessage(from: string, msg: Msg) {
   } else if (msg.t === "bye") {
     if (group && msg.device === from) {
       await saveGroup({ ...group, members: group.members.filter((m) => m.id !== from) });
-      conns.get(from)?.conn.close();
+      conns.get(from)?.hangUp();
     }
   } else if (msg.t === "members") {
     await mergeMembers(Array.isArray(msg.members) ? msg.members : []);
     void dialMissing(generation);
   } else if (msg.t === "rekey") {
     if (!group || typeof msg.secret !== "string" || !/^[0-9a-f]{64}$/.test(msg.secret) || !Array.isArray(msg.members)) return;
-    const members = msg.members.filter(isDevice).map(tidy).filter((m) => m.id !== me.id);
+    // a new secret can only shrink the group: nobody we did not already know comes in with it
+    const known = new Set(group.members.map((m) => m.id));
+    const members = msg.members.filter(isDevice).map(tidy).filter((m) => known.has(m.id));
     if (!members.some((m) => m.id === from)) return;
     await saveGroup({ secret: msg.secret, members });
     setTimeout(() => void connect(), 0); // everyone meets again under the new secret
@@ -354,6 +384,7 @@ const sendUnsent = () =>
 function adopt(conn: DataConnection, outgoing: boolean, run: number) {
   const key = groupKey!;
   let them: string | null = null;
+  let heard = Date.now();
   let chain: Promise<void> = Promise.resolve();
   const send = (msg: Msg) => {
     const sent = chain.then(() => sendSealed(conn, key, msg));
@@ -361,11 +392,19 @@ function adopt(conn: DataConnection, outgoing: boolean, run: number) {
     return sent;
   };
   const drop = () => {
+    log("closed", outgoing ? "out" : "in", them?.slice(0, 6), "current", !!them && conns.get(them)?.conn === conn);
     if (them && conns.get(them)?.conn === conn) {
       conns.delete(them);
       emit();
+      // if it is still around (a hiccup, or two connections were sorted out), get back in touch now
+      setTimeout(() => void dialMissing(run), 1500);
     }
     if (them) dialing.delete(them);
+  };
+  const hangUp = () => {
+    void send({ t: "close" }).catch(() => undefined);
+    setTimeout(() => conn.close(), 300);
+    drop();
   };
   conn.on("open", () => {
     if (run === generation && group) void send({ t: "hello", device: me, members: group.members }).catch(() => undefined);
@@ -374,7 +413,9 @@ function adopt(conn: DataConnection, outgoing: boolean, run: number) {
     queue(async () => {
       if (run !== generation || !group) return;
       const msg = await unseal(key, data);
-      if (!msg) return void conn.close(); // does not hold our key
+      if (!msg) return void (log("refused: wrong key"), conn.close()); // does not hold our key
+      heard = Date.now();
+      if (msg.t === "close") return void (conn.close(), drop());
       if (msg.t !== "hello") {
         if (them && conns.get(them)?.conn === conn) await onMessage(them, msg);
         return;
@@ -382,18 +423,22 @@ function adopt(conn: DataConnection, outgoing: boolean, run: number) {
       if (!isDevice(msg.device) || msg.device.id === me.id) return void conn.close();
       const id = msg.device.id;
       // holding the key is not enough: the device must also be one we were told about
-      if (!group.members.some((m) => m.id === id)) return void conn.close();
+      if (!group.members.some((m) => m.id === id)) return void (log("refused: unknown device", id.slice(0, 6)), hangUp());
+      // ...and be connected from the address that belongs to the id it claims
+      if (conn.peer !== "slate-" + (await derive(group.secret, "slate-device:" + id, 1)).tag) return void hangUp();
       const dialer = outgoing ? me.id : id;
       const existing = conns.get(id);
       if (existing && existing.conn !== conn) {
         // both sides dialled at once: the connection opened by the smaller id stays
         const keep = me.id < id ? me.id : id;
-        if (dialer !== keep) return void conn.close();
-        existing.conn.close();
+        if (dialer !== keep) return void (log("duplicate: closing this one", id.slice(0, 6)), hangUp());
+        log("duplicate: replacing the other", id.slice(0, 6));
+        existing.hangUp();
       }
       them = id;
       dialing.delete(id);
-      conns.set(id, { conn, dialer, send });
+      conns.set(id, { conn, dialer, send, hangUp, heard: () => heard });
+      log("connected", outgoing ? "out" : "in", id.slice(0, 6));
       await mergeMembers([msg.device, ...(Array.isArray(msg.members) ? msg.members : [])]);
       emit();
       await post(id, { t: "manifest", m: await manifestOf(db), reply: true });
@@ -411,6 +456,7 @@ async function dialMissing(run: number) {
     setTimeout(() => dialing.delete(m.id), 15_000);
     const { tag } = await derive(group.secret, "slate-device:" + m.id, 1);
     if (run !== generation || !peer || peer.destroyed || peer.disconnected) return;
+    log("dial", m.id.slice(0, 6));
     adopt(peer.connect("slate-" + tag, { reliable: true }), true, run);
   }
 }
@@ -490,6 +536,9 @@ async function connect() {
     if (!peer || peer.destroyed) void openPeer(run);
     else if (peer.disconnected) peer.reconnect();
     else {
+      // a device that has been silent for too long is gone, whatever the channel says
+      for (const c of [...conns.values()]) if (Date.now() - c.heard() > 50_000) c.hangUp();
+      void queue(() => post("*", { t: "ping" }));
       void dialMissing(run);
       if (ticks % 3 === 0) void exchange();
     }
@@ -655,6 +704,7 @@ export async function removeDevice(id: string): Promise<number> {
   const remaining = group.members.filter((m) => m.id !== id);
   const secret = randomHex(32);
   const reached: Device[] = [];
+  conns.get(id)?.hangUp(); // it hears nothing from here on
   await queue(async () => {
     // only those connected right now can be told; the rest are left on the old secret
     const online = remaining.filter((m) => conns.has(m.id));

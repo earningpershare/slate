@@ -27,16 +27,24 @@ for (const url of [base, `http://localhost:${BROKER}/`]) {
 
 const browser = await chromium.launch({ channel: "msedge" });
 const errors = [];
+const trace = []; // what the link did, printed when a step fails
+const t0 = Date.now();
 const watchPage = (name, page) => {
   page.setDefaultTimeout(10_000);
   page.on("pageerror", (e) => errors.push(name + " pageerror: " + e.message));
-  page.on("console", (m) => m.type() === "error" && errors.push(name + " console: " + m.text()));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(name + " console: " + m.text());
+    else if (m.text().startsWith("link:")) trace.push(((Date.now() - t0) / 1000).toFixed(2) + " " + name + " " + m.text().slice(6));
+  });
   return page;
 };
 const device = async (name, opts = {}) => {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "zh-TW", ...opts });
   // devices meet at the local broker instead of the public one
-  await ctx.addInitScript((b) => localStorage.setItem("slate:broker", b), "localhost:" + BROKER);
+  await ctx.addInitScript((b) => {
+    localStorage.setItem("slate:broker", b);
+    localStorage.setItem("slate:debug", "1");
+  }, "localhost:" + BROKER);
   return watchPage(name, await ctx.newPage());
 };
 const step = async (name, fn) => {
@@ -45,8 +53,10 @@ const step = async (name, fn) => {
     console.log("ok   " + name);
   } catch (e) {
     console.log("FAIL " + name + "\n     " + String(e.message).split("\n").slice(0, 3).join(" | "));
+    console.log(trace.slice(-60).map((l) => "       " + l).join("\n"));
     process.exitCode = 1;
   }
+  trace.length = 0;
 };
 const store = (page, table) =>
   page.evaluate(
