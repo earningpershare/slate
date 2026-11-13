@@ -449,6 +449,37 @@ function SettingsModal({
     input.click();
   };
 
+  // from another app: added to what is here, nothing is replaced
+  const [importing, setImporting] = useState(false);
+  const doImportOther = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".zip,.csv,application/zip,text/csv";
+    input.onchange = async () => {
+      const f = input.files?.[0];
+      if (!f) return;
+      setImporting(true);
+      setMsg("匯入中，檔案大的話需要一點時間…");
+      try {
+        const [{ importFile }, { markdownToBlocks }] = await Promise.all([import("./lib/importers"), import("./components/Editor")]);
+        const r = await importFile(f, markdownToBlocks);
+        if (r.kind === "ticktick") {
+          setMsg(`已從滴答清單匯入 ${r.tasks} 筆任務${r.lists ? `、${r.lists} 個清單` : ""}。`);
+          navigate("/tasks/inbox");
+        } else {
+          setMsg(
+            `已從 Notion 匯入 ${r.pages} 個頁面${r.databases ? `、${r.databases} 個資料庫（${r.rows} 列）` : ""}${r.files ? `、${r.files} 個附件` : ""}，放在「從 Notion 匯入」底下。`,
+          );
+          openPage(r.root);
+        }
+      } catch (e) {
+        setMsg("匯入失敗：" + (e instanceof Error ? e.message : "檔案無法讀取"));
+      }
+      setImporting(false);
+    };
+    input.click();
+  };
+
   return (
     <Modal onClose={onClose} className="settings" label="設定與備份">
       <h2>設定與備份</h2>
@@ -472,6 +503,15 @@ function SettingsModal({
         </button>
         <button className="btn" onClick={doImport}>
           <Upload size={15} /> 從備份還原
+        </button>
+      </div>
+      <p className="muted" style={{ marginTop: 14 }}>
+        從別的 App 搬過來：Notion 匯出的 .zip（匯出時選「Markdown & CSV」並包含子頁面），或滴答清單／TickTick 的備份 .csv。
+        匯入的內容會加進來，不會取代現有資料。
+      </p>
+      <div className="row">
+        <button className="btn" disabled={importing} onClick={doImportOther}>
+          <Upload size={15} /> {importing ? "匯入中…" : "從 Notion／滴答清單匯入"}
         </button>
       </div>
       {msg && (
