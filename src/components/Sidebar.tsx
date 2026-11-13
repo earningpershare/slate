@@ -15,8 +15,7 @@ import {
   Star,
   Table2,
   Trash2,
-  Undo2,
-} from "lucide-react";
+  Undo2, Sparkles } from "lucide-react";
 import {
   createDatabase,
   createPage,
@@ -41,12 +40,14 @@ export default function Sidebar({
   section,
   onSearch,
   onSettings,
+  onAssistant,
   onCollapse,
 }: {
   currentId?: string;
   section: string;
   onSearch: () => void;
   onSettings: () => void;
+  onAssistant: () => void;
   onCollapse: () => void;
 }) {
   const pages = useLiveQuery(() => db.pages.toArray(), []) ?? [];
@@ -299,6 +300,12 @@ export default function Sidebar({
             </div>
           )}
         </Popover>
+        <button className="nav-row" onClick={onAssistant}>
+          <span className="nav-icon">
+            <Sparkles size={15} />
+          </span>
+          <span className="nav-label">AI 助理</span>
+        </button>
         <button className="nav-row" onClick={onSettings}>
           <span className="nav-icon">
             <Settings size={15} />

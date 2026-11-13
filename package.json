@@ -25,6 +25,7 @@
     "vitest": "^2.1.9"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
     "@blocknote/core": "^0.57.0",
     "@blocknote/mantine": "^0.57.0",
     "@blocknote/react": "^0.57.0",

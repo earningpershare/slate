@@ -167,6 +167,12 @@ export function markdownToBlocks(md: string): unknown[] {
   return BlockNoteEditor.create({ schema }).tryParseMarkdownToBlocks(md);
 }
 
+/** Document blocks as Markdown (some formatting is lost; used when a model reads a page). */
+export function blocksToMarkdown(blocks: unknown[]): string | Promise<string> {
+  const editor = BlockNoteEditor.create({ schema });
+  return editor.blocksToMarkdownLossy(blocks as Parameters<typeof editor.blocksToMarkdownLossy>[0]);
+}
+
 export default function Editor({
   pageId,
   initialContent,

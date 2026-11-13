@@ -120,6 +120,15 @@ export default function PageView({
     setRestored((r) => ({ n: r.n + 1, content: page.content }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page?.rev, page?.dirty]);
+  // The assistant rewrote this page: show its version now, even mid-typing (what was there is in the history).
+  useEffect(() => {
+    const written = (e: Event) => {
+      if ((e as CustomEvent<string>).detail !== id) return;
+      void db.pages.get(id).then((p) => p && setRestored((r) => ({ n: r.n + 1, content: p.content })));
+    };
+    window.addEventListener("slate:page-written", written);
+    return () => window.removeEventListener("slate:page-written", written);
+  }, [id]);
   const coverStyle = useCoverStyle(page?.cover);
   const parentSchema = page?.isRow ? parent?.schema : undefined;
   const related = useRelated(useMemo(() => parentSchema ?? [], [parentSchema]));

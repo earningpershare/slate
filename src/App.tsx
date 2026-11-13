@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { CheckSquare, Download, House, Menu, PanelLeftOpen, Plus, Search, Upload } from "lucide-react";
 import { createPage, db, exportAll, importAll, seedIfEmpty } from "./db";
@@ -21,6 +21,8 @@ import Home from "./components/Home";
 import PageView from "./components/PageView";
 import Sidebar, { pageIcon } from "./components/Sidebar";
 import TasksView, { FocusTicker, ReminderTicker } from "./components/tasks/TasksView";
+
+const AssistantPanel = lazy(() => import("./components/Assistant"));
 
 type Theme = "system" | "light" | "dark";
 
@@ -60,6 +62,7 @@ export default function App() {
   const peekId = usePeek();
   const [search, setSearch] = useState(false);
   const [settings, setSettings] = useState(false);
+  const [assistant, setAssistant] = useLocalState("assistant-open", false);
   const [ready, setReady] = useState(false);
   const dark = useDark(theme);
   // phone visitors who have not installed Slate see the download page first
@@ -193,6 +196,11 @@ export default function App() {
     >
       <FocusTicker />
       <ReminderTicker />
+      {assistant && (
+        <Suspense fallback={null}>
+          <AssistantPanel onClose={() => setAssistant(false)} />
+        </Suspense>
+      )}
       <Toaster />
       <InstallBar />
       {sidebar && !narrow && (
@@ -217,6 +225,10 @@ export default function App() {
             onSettings={() => {
               setDrawer(false);
               setSettings(true);
+            }}
+            onAssistant={() => {
+              setDrawer(false);
+              setAssistant(!assistant);
             }}
             onCollapse={() => setSidebar(false)}
           />
