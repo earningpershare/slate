@@ -120,7 +120,9 @@ export function safeBlocks(blocks: unknown[]): unknown[] {
 
 /** A title as it may appear inside a question to the person: one line, no control characters, not too long. */
 export const plain = (title: unknown) => {
-  const t = String(title ?? "").replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
+  // control characters, line separators, and invisible formatting characters (zero-width, bidi overrides)
+  // that could reorder or hide part of what the person is asked
+  const t = String(title ?? "").replace(/[p{Cc}p{Cf}p{Zl}p{Zp}]+/gu, " ").replace(/s+/g, " ").trim();
   return t.length > 60 ? t.slice(0, 60) + "…" : t || "未命名";
 };
 

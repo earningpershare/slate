@@ -122,6 +122,9 @@ describe("what the person is asked before something is destroyed", () => {
     const label = await del.describe({ id: t.id });
     expect(label).not.toMatch(/[\n\r\u2028]/); // one line: it cannot add fake buttons or instructions
     expect(label.length).toBeLessThan(120);
+    // invisible characters that flip the reading direction or hide text are dropped too
+    await call("update_task", { id: t.id, title: "safe‮gnp.exe⁦​﻿" });
+    expect(await del.describe({ id: t.id })).toContain("「safegnp.exe」");
     expect(label).toContain("（助理剛才把它從「報稅」改名）");
   });
 });
