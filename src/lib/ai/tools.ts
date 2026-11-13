@@ -69,9 +69,53 @@ export function validate(tool: Tool, input: unknown): string[] {
  */
 export function safeMarkdown(markdown: string): string {
   return markdown
-    .replace(/<\s*(img|iframe|video|audio|source|object|embed|link|script|style)\b[^>]*>/gi, "")
+    .replace(/<\/?[a-zA-Z][^>]*>/g, "") // no raw HTML at all
     .replace(/!\[([^\]]*)\]\(\s*<?(?!idb:\/\/)([^)\s>]+)>?[^)]*\)/g, (_, alt: string, url: string) => `[${alt || url}](${url})`)
     .replace(/\]\(\s*<?\s*(javascript|data|vbscript|file)\s*:[^)]*\)/gi, "](#)");
+}
+
+type Node = Record<string, unknown>;
+const MEDIA = new Set(["image", "video", "audio", "file"]);
+const okLink = (href: unknown) => typeof href === "string" && /^(https?:|mailto:|#\/)/i.test(href.trim());
+
+/**
+ * The same guarantee as safeMarkdown, enforced on what the Markdown parser actually
+ * produced, so no clever syntax can get around it: after this, the content holds no
+ * picture, video, audio or file that is fetched from the internet, and no link that is
+ * not plain http(s), mailto or a link inside the workspace.
+ */
+export function safeBlocks(blocks: unknown[]): unknown[] {
+  const inline = (nodes: unknown): unknown => {
+    if (!Array.isArray(nodes)) return nodes;
+    return nodes.flatMap((raw) => {
+      const n = raw as Node;
+      if (n?.type === "link" && !okLink(n.href)) return Array.isArray(n.content) ? n.content : []; // keep the words, drop the target
+      if (n && typeof n === "object" && Array.isArray(n.content)) return [{ ...n, content: inline(n.content) }];
+      return [raw];
+    });
+  };
+  return blocks.map((raw) => {
+    const b = raw as Node;
+    if (!b || typeof b !== "object") return raw;
+    const children = Array.isArray(b.children) ? safeBlocks(b.children) : b.children;
+    const props = (b.props ?? {}) as Node;
+    const url = typeof props.url === "string" ? props.url : "";
+    if (MEDIA.has(String(b.type)) && url && !url.startsWith("idb://")) {
+      const label = String(props.caption || props.name || (okLink(url) ? url : "（已移除的外部內容）"));
+      const content = okLink(url) ? [{ type: "link", href: url, content: [{ type: "text", text: label, styles: {} }] }] : [{ type: "text", text: label, styles: {} }];
+      return { type: "paragraph", content, ...(children ? { children } : {}) };
+    }
+    // a table keeps its cells under content.rows[].cells[]
+    const table = b.content as { rows?: { cells?: unknown[] }[] } | undefined;
+    if (table && !Array.isArray(table) && Array.isArray(table.rows)) {
+      const rows = table.rows.map((r) => ({
+        ...r,
+        cells: (r.cells ?? []).map((c) => (Array.isArray(c) ? inline(c) : c && typeof c === "object" ? { ...(c as Node), content: inline((c as Node).content) } : c)),
+      }));
+      return { ...b, content: { ...table, rows }, ...(children ? { children } : {}) };
+    }
+    return { ...b, content: inline(b.content), ...(children ? { children } : {}) };
+  });
 }
 
 /** A locked page is not to be changed by the assistant in any way. */
@@ -215,7 +259,7 @@ const obj = (properties: Tool["schema"]["properties"], required: string[] = []):
 
 export function slateTools(host: ToolHost): Tool[] {
   const setContent = async (id: string, markdown: string, append: boolean) => {
-    const blocks = await host.toBlocks(safeMarkdown(markdown));
+    const blocks = safeBlocks(await host.toBlocks(safeMarkdown(markdown)));
     const current = append ? ((await db.pages.get(id))?.content ?? []) : [];
     await updatePage(id, { content: [...current, ...blocks] });
     host.pageWritten?.(id);
@@ -362,6 +406,11 @@ export function slateTools(host: ToolHost): Tool[] {
       },
       async run(i) {
         const p = unlocked(await page(i.id));
+        // trashing a page takes everything under it along: a locked page down there protects the whole branch
+        const locked = (await descendantsOf(p.id)).filter((d) => d.locked);
+        if (locked.length) {
+          throw new ToolError(`This page contains locked pages (${locked.slice(0, 5).map((d) => `"${d.title || "未命名"}"`).join(", ")}), so it cannot be moved to the trash. Tell the person.`);
+        }
         await trashPage(p.id);
         return { id: p.id, title: p.title, trashed: true };
       },

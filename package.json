@@ -10,6 +10,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "make-mcp": "node scripts/make-mcp.mjs",
     "e2e": "node e2e/smoke.mjs"
   },
   "devDependencies": {

@@ -243,6 +243,17 @@ td:hover .cell-input[type="date"]::-webkit-calendar-picker-indicator,
 .ai-input textarea { flex: 1; resize: none; min-height: 38px; max-height: 140px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; font-size: 16px; line-height: 1.4; field-sizing: content; }
 .ai-input textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .ai-input .btn { height: 38px; width: 38px; justify-content: center; padding: 0; flex: none; }
+.ai-mcp { display: flex; flex-direction: column; gap: 10px; font-size: 13.5px; line-height: 1.6; }
+.ai-mcp p { margin: 0; }
+.ai-mcp ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; }
+.ai-mcp a { color: var(--accent); }
+.ai-mcp code { display: block; margin: 4px 0; padding: 6px 8px; border-radius: 6px; background: var(--hover); font: 12px/1.5 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; user-select: all; }
+.ai-mcp code.inline { display: inline; margin: 0; padding: 1px 4px; user-select: auto; }
+.ai-switch { display: flex !important; flex-direction: row !important; align-items: center; gap: 8px; font-size: 14px !important; color: var(--text) !important; font-weight: 600; }
+.ai-switch input { width: 18px; height: 18px; accent-color: var(--accent); }
+.ai-bridge-state { padding: 8px 10px; border-radius: 8px; background: var(--hover); }
+.ai-bridge-state.connected { background: var(--accent-soft); }
+[data-theme="dark"] .ai-bridge-state.connected { background: var(--active); }
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 900px) { .ai-panel { width: 100vw; border-left: 0; z-index: 3000; } }

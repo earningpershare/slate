@@ -108,9 +108,13 @@ Windows 上可以直接雙擊 `start.bat`。同步功能需要 HTTPS 或 localho
   刪除類的動作會先問你；被改寫的頁面可以從版本歷史還原。
 - 模型來源自己選，設定只存在這台裝置上（不同步、不進備份）：
   - **Claude API 金鑰**：金鑰和對話從你的裝置直接送到 Anthropic，沒有中間伺服器。用量依 API 計費，Claude 的 Pro／Max 訂閱不適用。
+  - **Claude 訂閱（Claude 桌面版／Claude Code）**：不用金鑰。下載單檔的橋接程式 `slate-mcp.mjs`（MCP 伺服器，需要 Node 18 以上），
+    在 Claude 裡登記它，再到助理的模型設定打開「允許這台電腦上的 Claude 連進來」。之後直接在 Claude 裡說要做什麼，
+    由開著的 Slate 分頁執行。橋接程式不存資料，只接受本站和本機的連線；刪除時 Slate 分頁會跳出視窗問你。只能在電腦上用。
   - **本機模型**：Ollama、LM Studio 等提供 OpenAI 相容接口的程式，資料完全不離開電腦。模型要支援工具呼叫；
     Ollama 要先設定 `OLLAMA_ORIGINS` 允許這個網站連線。小模型操作工具比較容易出錯。
-- 實作：`src/lib/ai/tools.ts` 是和模型無關的工具層（有單元測試），`claude.ts`、`local.ts` 是兩種模型來源，`e2e/assistant.mjs` 用假模型把整個流程跑一遍。
+- 實作：`src/lib/ai/tools.ts` 是和模型無關的工具層（有單元測試），`claude.ts`、`local.ts` 是兩種模型來源，`bridge.ts` 加上 `public/slate-mcp.mjs` 是給 MCP 用戶端的橋；
+  `e2e/assistant.mjs`、`e2e/mcp.mjs` 用假模型和假 MCP 用戶端把整個流程跑一遍。改了工具的名稱或參數後要執行 `npm run make-mcp` 更新橋接程式裡的那份。
 
 **從別的 App 搬過來**（設定與備份 →「從 Notion／滴答清單匯入」，內容是加進來，不會取代現有資料）
 - Notion：匯出時選「Markdown & CSV」並包含子頁面，把下載到的 .zip 直接選進來。頁面的階層、資料庫與每一列、

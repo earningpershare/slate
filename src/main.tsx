@@ -6,6 +6,7 @@ import { registerSW } from "virtual:pwa-register";
 import App from "./App";
 import { db } from "./db";
 import { startLink } from "./lib/link";
+import { startBridge } from "./lib/ai/bridge";
 import "./styles.css";
 import "./styles-extra.css";
 import "./styles-mobile.css";
@@ -15,6 +16,8 @@ registerSW({ immediate: true });
 
 // reconnect to the devices this one is linked with, if any
 void startLink(db);
+// listen for Claude on this computer, if the person switched that on
+startBridge();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

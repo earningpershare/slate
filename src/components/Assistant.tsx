@@ -12,6 +12,7 @@ import {
   saveSettings,
   type ToolEvent,
 } from "../lib/ai/assistant";
+import { bridgeEnabled, setBridgeEnabled, useBridge } from "../lib/ai/bridge";
 
 type Item =
   | { kind: "user"; text: string }
@@ -33,9 +34,66 @@ async function connect(settings: AiSettings): Promise<Assistant> {
     : (await import("../lib/ai/local")).createLocal(settings, tools);
 }
 
+/** Using a Claude plan instead of a key: Claude Desktop / Claude Code reach this tab through a small bridge program. */
+function SubscriptionSetup() {
+  const state = useBridge();
+  const [on, setOn] = useState(bridgeEnabled);
+  return (
+    <div className="ai-mcp">
+      <p className="muted small">
+        不用 API 金鑰：讓你電腦上的 <b>Claude 桌面版</b>或 <b>Claude Code</b> 連進這個 Slate，用的是它們本來的方案（Pro／Max 等）。 對話在 Claude
+        那邊進行，Slate 這個分頁要開著。只能在電腦上使用。
+      </p>
+      <ol>
+        <li>
+          下載橋接程式{" "}
+          <a href="slate-mcp.mjs" download>
+            slate-mcp.mjs
+          </a>
+          （單一檔案，電腦要裝有 Node.js 18 以上）。
+        </li>
+        <li>
+          告訴 Claude 它在哪裡。Claude Code 執行：
+          <code>claude mcp add slate -- node 下載的路徑/slate-mcp.mjs</code>
+          Claude 桌面版：設定 → 開發人員 → 編輯設定，在 <code className="inline">mcpServers</code> 裡加入：
+          <code>{'"slate": { "command": "node", "args": ["下載的路徑/slate-mcp.mjs"] }'}</code>
+          然後重新啟動 Claude。
+        </li>
+        <li>打開下面的開關。瀏覽器問是否允許這個網站連線到這台裝置上的應用程式時，請按允許。</li>
+      </ol>
+      <label className="ai-switch">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => {
+            setOn(e.target.checked);
+            setBridgeEnabled(e.target.checked);
+          }}
+        />
+        允許這台電腦上的 Claude 連進來
+      </label>
+      {on && (
+        <p className={"ai-bridge-state " + state} role="status">
+          {state === "connected"
+            ? "已連上橋接程式。現在可以在 Claude 裡說「看看我 Slate 今天的任務」。"
+            : "還沒找到橋接程式。請確認 Claude 已經啟動而且設定好了；它啟動後這裡會自動連上。"}
+        </p>
+      )}
+      <p className="muted small">
+        橋接程式不儲存任何資料，也只接受這個網站和這台電腦的連線。Claude 要刪除東西時，這個分頁會先跳出視窗問你。
+        Claude 讀到的頁面內容會送給 Anthropic 處理。
+      </p>
+    </div>
+  );
+}
+
 function Setup({ initial, onSave, onCancel }: { initial: AiSettings; onSave: (s: AiSettings) => void; onCancel?: () => void }) {
   const [s, setS] = useState(initial);
-  const set = (patch: Partial<AiSettings>) => setS((cur) => ({ ...cur, ...patch }));
+  const [plan, setPlan] = useState(false); // the "Claude plan" tab, which is not a chat provider
+  const set = (patch: Partial<AiSettings>) => {
+    setPlan(false);
+    setS((cur) => ({ ...cur, ...patch }));
+  };
   return (
     <form
       className="ai-setup auth-form"
@@ -46,14 +104,19 @@ function Setup({ initial, onSave, onCancel }: { initial: AiSettings; onSave: (s:
     >
       <p className="muted">助理可以幫你找資料、寫頁面、整理任務。選一個模型來源；設定只存在這台裝置上，不會同步，也不會進備份。</p>
       <div className="seg">
-        <button type="button" className={"seg-btn" + (s.provider === "claude" ? " active" : "")} onClick={() => set({ provider: "claude" })}>
+        <button type="button" className={"seg-btn" + (!plan && s.provider === "claude" ? " active" : "")} onClick={() => set({ provider: "claude" })}>
           Claude API 金鑰
         </button>
-        <button type="button" className={"seg-btn" + (s.provider === "local" ? " active" : "")} onClick={() => set({ provider: "local" })}>
+        <button type="button" className={"seg-btn" + (!plan && s.provider === "local" ? " active" : "")} onClick={() => set({ provider: "local" })}>
           本機模型
         </button>
+        <button type="button" className={"seg-btn" + (plan ? " active" : "")} onClick={() => setPlan(true)}>
+          Claude 訂閱
+        </button>
       </div>
-      {s.provider === "claude" ? (
+      {plan ? (
+        <SubscriptionSetup />
+      ) : s.provider === "claude" ? (
         <>
           <label>
             API 金鑰
@@ -94,7 +157,7 @@ function Setup({ initial, onSave, onCancel }: { initial: AiSettings; onSave: (s:
           </p>
         </>
       )}
-      <div className="row">
+      <div className="row" style={plan ? { display: "none" } : undefined}>
         <button className="btn primary" disabled={!isConfigured(s)}>
           儲存
         </button>

