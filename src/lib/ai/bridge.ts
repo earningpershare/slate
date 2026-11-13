@@ -6,7 +6,8 @@ import { useSyncExternalStore } from "react";
 import { toast } from "../../stores";
 import type { Tool } from "./tools";
 
-export type BridgeState = "off" | "searching" | "connected";
+/** "unpaired": something answers on the port, but it does not know this tab's pairing code */
+export type BridgeState = "off" | "searching" | "unpaired" | "connected";
 
 const KEY = "ai-bridge";
 const DEFAULT_URL = "http://127.0.0.1:47800";
@@ -43,6 +44,20 @@ const bridgeUrl = () => (read("slate:bridge") || DEFAULT_URL).replace(/\/+$/, ""
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// ---- pairing: both ends prove they know the code, and the code itself is never sent ----
+const CODE_KEY = "ai-bridge-code";
+export const bridgeCode = () => read(CODE_KEY) ?? "";
+const normalCode = (code: string) => code.toUpperCase().replace(/[^0-9A-F]/g, "");
+export const validCode = (code: string) => normalCode(code).length === 16;
+
+const text = new TextEncoder();
+async function signer(code: string) {
+  const key = await crypto.subtle.importKey("raw", text.encode(normalCode(code)), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return async (message: string) =>
+    Array.from(new Uint8Array(await crypto.subtle.sign("HMAC", key, text.encode(message))), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+const randomHex = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+
 // loaded on the first call, so a workspace that never uses this pays nothing for it at startup
 async function loadTools() {
   const [{ slateTools, callTool }, editor] = await Promise.all([import("./tools"), import("../../components/Editor")]);
@@ -58,17 +73,42 @@ async function loop(mine: number, signal: AbortSignal) {
   const url = bridgeUrl();
   let kit: Awaited<ReturnType<typeof loadTools>> | null = null;
   let wait = 2000;
+  const sign = await signer(bridgeCode());
   while (mine === run) {
     let call: { id: string; name: string; input: unknown } | null = null;
     try {
-      // a quick knock first: the poll below can stay open for a long while
-      if (state !== "connected") await fetch(url + "/hello", { cache: "no-store", signal });
-      if (mine !== run) return;
+      if (state !== "connected") {
+        // Is the program on that port the bridge this tab is paired with? Only it can sign our random number.
+        // (Another program could be sitting on the port; it gets no further than this.)
+        const n = randomHex();
+        const hello = await fetch(`${url}/hello?n=${n}`, { cache: "no-store", signal });
+        const answer = hello.ok ? ((await hello.json()) as { mac?: string }) : {};
+        if (mine !== run) return;
+        if (answer.mac !== (await sign("hello:" + n))) {
+          set("unpaired");
+          await sleep(5000);
+          continue;
+        }
+      }
       set("connected");
       wait = 2000;
-      const res = await fetch(url + "/poll", { cache: "no-store", signal });
+      const t = Date.now();
+      const res = await fetch(`${url}/poll?t=${t}&m=${await sign("poll:" + t)}`, { cache: "no-store", signal });
       if (mine !== run) return;
-      if (res.status === 200) call = await res.json();
+      if (res.status === 401) {
+        set("unpaired");
+        await sleep(5000);
+        continue;
+      }
+      if (res.status === 200) {
+        const got = (await res.json()) as { id: string; name: string; args: string; mac: string };
+        // every call is signed; one that is not came from somewhere else and is dropped unread
+        if (got.mac !== (await sign(`call:${got.id}:${got.name}:${got.args}`))) {
+          set("unpaired");
+          continue;
+        }
+        call = { id: got.id, name: got.name, input: JSON.parse(got.args) };
+      }
     } catch {
       // the bridge is not running (Claude is closed), or the browser refused the connection
       if (mine !== run) return;
@@ -97,7 +137,12 @@ async function loop(mine: number, signal: AbortSignal) {
       if (tool && !result.error && !/^(search|list_|read_)/.test(tool.name)) toast("Claude：" + label);
     }
     try {
-      await fetch(url + "/result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: call.id, ...result }) });
+      const t = Date.now();
+      await fetch(url + "/result", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: call.id, ...result, t, m: await sign(`result:${call.id}:${t}`) }),
+      });
     } catch {
       /* the bridge went away mid-call: Claude sees a timeout */
     }
@@ -110,9 +155,19 @@ export function startBridge() {
   hangUp?.abort();
   hangUp = null;
   if (!bridgeEnabled()) return void set("off");
+  if (!validCode(bridgeCode()) || !crypto.subtle) return void set("unpaired");
   set("searching");
   hangUp = new AbortController();
   void loop(run, hangUp.signal);
+}
+
+export function setBridgeCode(code: string) {
+  try {
+    localStorage.setItem(CODE_KEY, code.trim());
+  } catch {
+    /* storage unavailable */
+  }
+  startBridge();
 }
 
 export function setBridgeEnabled(on: boolean) {

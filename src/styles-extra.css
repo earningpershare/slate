@@ -252,6 +252,8 @@ td:hover .cell-input[type="date"]::-webkit-calendar-picker-indicator,
 .ai-switch { display: flex !important; flex-direction: row !important; align-items: center; gap: 8px; font-size: 14px !important; color: var(--text) !important; font-weight: 600; }
 .ai-switch input { width: 18px; height: 18px; accent-color: var(--accent); }
 .ai-bridge-state { padding: 8px 10px; border-radius: 8px; background: var(--hover); }
+.ai-bridge-state.unpaired { color: var(--danger); }
+.ai-code { font: 600 15px/1 ui-monospace, Consolas, monospace; letter-spacing: 0.06em; text-transform: uppercase; }
 .ai-bridge-state.connected { background: var(--accent-soft); }
 [data-theme="dark"] .ai-bridge-state.connected { background: var(--active); }
 .spin { animation: spin 0.9s linear infinite; }

@@ -118,6 +118,12 @@ export function safeBlocks(blocks: unknown[]): unknown[] {
   });
 }
 
+/** A title as it may appear inside a question to the person: one line, no control characters, not too long. */
+export const plain = (title: unknown) => {
+  const t = String(title ?? "").replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
+  return t.length > 60 ? t.slice(0, 60) + "…" : t || "未命名";
+};
+
 /** A locked page is not to be changed by the assistant in any way. */
 function unlocked(p: Page, what = "page"): Page {
   if (p.locked) throw new ToolError(`This ${what} is locked, so it cannot be changed. Tell the person; they can unlock it from the page's menu.`);
@@ -258,6 +264,13 @@ const obj = (properties: Tool["schema"]["properties"], required: string[] = []):
 // ---------- the tools ----------
 
 export function slateTools(host: ToolHost): Tool[] {
+  // What the assistant itself renamed in this session, with the name the person last saw.
+  // A confirmation shows it, so "rename the important thing to 'junk', then delete 'junk'" is visible.
+  const renamed = new Map<string, string>();
+  const noteRename = (id: string, before: string, after: string) => {
+    if (before !== after && !renamed.has(id)) renamed.set(id, before);
+  };
+  const formerly = (id: string) => (renamed.has(id) ? `（助理剛才把它從「${plain(renamed.get(id))}」改名）` : "");
   const setContent = async (id: string, markdown: string, append: boolean) => {
     const blocks = safeBlocks(await host.toBlocks(safeMarkdown(markdown)));
     const current = append ? ((await db.pages.get(id))?.content ?? []) : [];
@@ -271,7 +284,7 @@ export function slateTools(host: ToolHost): Tool[] {
       description:
         "Search the workspace for pages, database rows and tasks whose title or text contains the query. Use this first when the person refers to something by name. Returns ids to use with the other tools.",
       schema: obj({ query: { type: "string", description: "Words to look for (case-insensitive)" } }, ["query"]),
-      describe: (i) => `搜尋「${str(i.query)}」`,
+      describe: (i) => `搜尋「${plain(i.query)}」`,
       async run(i) {
         const q = str(i.query).toLowerCase();
         if (!q) throw new ToolError("query is empty");
@@ -359,7 +372,7 @@ export function slateTools(host: ToolHost): Tool[] {
         },
         ["title"],
       ),
-      describe: (i) => `建立頁面「${str(i.title)}」`,
+      describe: (i) => `建立頁面「${plain(i.title)}」`,
       async run(i) {
         const parent = str(i.parent_id);
         if (parent) await page(parent);
@@ -386,7 +399,10 @@ export function slateTools(host: ToolHost): Tool[] {
       async run(i) {
         const p = unlocked(await page(i.id));
         const patch: Partial<Page> = {};
-        if (i.title !== undefined) patch.title = str(i.title);
+        if (i.title !== undefined) {
+          patch.title = str(i.title);
+          noteRename(p.id, p.title, patch.title);
+        }
         if (i.icon !== undefined) patch.icon = str(i.icon);
         if (Object.keys(patch).length) await updatePage(p.id, patch);
         if (i.markdown !== undefined) await setContent(p.id, String(i.markdown), i.mode === "append");
@@ -402,7 +418,7 @@ export function slateTools(host: ToolHost): Tool[] {
         const p = await db.pages.get(str(i.id));
         if (!alive(p)) return "把頁面移到垃圾桶";
         const inside = (await descendantsOf(p.id)).length;
-        return `把${p.kind === "database" ? "資料庫" : "頁面"}「${p.title || "未命名"}」${inside ? `和它底下的 ${inside} 個項目` : ""}移到垃圾桶`;
+        return `把${p.kind === "database" ? "資料庫" : "頁面"}「${plain(p.title)}」${formerly(p.id)}${inside ? `和它底下的 ${inside} 個項目` : ""}移到垃圾桶`;
       },
       async run(i) {
         const p = unlocked(await page(i.id));
@@ -431,7 +447,7 @@ export function slateTools(host: ToolHost): Tool[] {
         },
         ["title"],
       ),
-      describe: (i) => `建立資料庫「${str(i.title)}」`,
+      describe: (i) => `建立資料庫「${plain(i.title)}」`,
       async run(i) {
         const parent = str(i.parent_id);
         if (parent) await page(parent);
@@ -461,7 +477,7 @@ export function slateTools(host: ToolHost): Tool[] {
         },
         ["database_id", "title"],
       ),
-      describe: (i) => `新增一列「${str(i.title)}」`,
+      describe: (i) => `新增一列「${plain(i.title)}」`,
       async run(i) {
         const d = unlocked(await page(i.database_id), "database");
         if (d.kind !== "database") throw new ToolError("That page is not a database.");
@@ -480,6 +496,7 @@ export function slateTools(host: ToolHost): Tool[] {
         if (!row.isRow) throw new ToolError("That page is not a database row.");
         const d = unlocked(await page(row.parentId), "database");
         const props = await toProps(d, (i.values as Record<string, unknown>) ?? {});
+        if (i.title !== undefined) noteRename(row.id, row.title, str(i.title));
         await mutatePage(row.id, (cur) => ({ ...(i.title !== undefined ? { title: str(i.title) } : {}), props: { ...cur.props, ...props } }));
         return rowOut((await db.pages.get(row.id))!, (await db.pages.get(d.id))!.schema ?? []);
       },
@@ -532,7 +549,7 @@ export function slateTools(host: ToolHost): Tool[] {
         },
         ["title"],
       ),
-      describe: (i) => `新增任務「${str(i.title)}」`,
+      describe: (i) => `新增任務「${plain(i.title)}」`,
       async run(i) {
         if (i.due !== undefined && !DATE.test(str(i.due))) throw new ToolError("due must be YYYY-MM-DD");
         if (i.due_time !== undefined && !TIME.test(str(i.due_time))) throw new ToolError("due_time must be HH:mm");
@@ -574,7 +591,10 @@ export function slateTools(host: ToolHost): Tool[] {
       async run(i) {
         const t = await task(i.id);
         const patch: Partial<Task> = {};
-        if (i.title !== undefined) patch.title = str(i.title);
+        if (i.title !== undefined) {
+          patch.title = str(i.title);
+          noteRename(t.id, t.title, patch.title);
+        }
         if (i.note !== undefined) patch.note = str(i.note);
         if (i.list !== undefined) patch.listId = await listIdOf(i.list, true);
         if (i.due !== undefined) {
@@ -606,7 +626,7 @@ export function slateTools(host: ToolHost): Tool[] {
         const t = await db.tasks.get(str(i.id));
         if (!t) return "永久刪除任務";
         const subs = await db.tasks.where("parentId").equals(t.id).count();
-        return `永久刪除任務「${t.title}」${subs ? `和它的 ${subs} 個子任務` : ""}`;
+        return `永久刪除任務「${plain(t.title)}」${formerly(t.id)}${subs ? `和它的 ${subs} 個子任務` : ""}`;
       },
       async run(i) {
         const t = await task(i.id);

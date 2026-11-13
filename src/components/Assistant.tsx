@@ -12,7 +12,7 @@ import {
   saveSettings,
   type ToolEvent,
 } from "../lib/ai/assistant";
-import { bridgeEnabled, setBridgeEnabled, useBridge } from "../lib/ai/bridge";
+import { bridgeCode, bridgeEnabled, setBridgeCode, setBridgeEnabled, useBridge, validCode } from "../lib/ai/bridge";
 
 type Item =
   | { kind: "user"; text: string }
@@ -38,6 +38,7 @@ async function connect(settings: AiSettings): Promise<Assistant> {
 function SubscriptionSetup() {
   const state = useBridge();
   const [on, setOn] = useState(bridgeEnabled);
+  const [code, setCode] = useState(bridgeCode);
   return (
     <div className="ai-mcp">
       <p className="muted small">
@@ -59,8 +60,27 @@ function SubscriptionSetup() {
           <code>{'"slate": { "command": "node", "args": ["下載的路徑/slate-mcp.mjs"] }'}</code>
           然後重新啟動 Claude。
         </li>
+        <li>
+          取得這台電腦的配對碼：在 Claude 裡說「給我 Slate 配對碼」，或在終端機執行
+          <code>node 下載的路徑/slate-mcp.mjs pair</code>
+          把它貼在下面。配對碼讓 Slate 只聽你自己的橋接程式。
+        </li>
         <li>打開下面的開關。瀏覽器問是否允許這個網站連線到這台裝置上的應用程式時，請按允許。</li>
       </ol>
+      <label>
+        配對碼
+        <input
+          className="input ai-code"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="XXXX-XXXX-XXXX-XXXX"
+          value={code}
+          onChange={(e) => {
+            setCode(e.target.value);
+            if (validCode(e.target.value) || !e.target.value.trim()) setBridgeCode(e.target.value);
+          }}
+        />
+      </label>
       <label className="ai-switch">
         <input
           type="checkbox"
@@ -76,11 +96,15 @@ function SubscriptionSetup() {
         <p className={"ai-bridge-state " + state} role="status">
           {state === "connected"
             ? "已連上橋接程式。現在可以在 Claude 裡說「看看我 Slate 今天的任務」。"
-            : "還沒找到橋接程式。請確認 Claude 已經啟動而且設定好了；它啟動後這裡會自動連上。"}
+            : state === "unpaired"
+              ? validCode(code)
+                ? "配對碼不符：那個連接埠上的程式不是用這組配對碼的橋接程式，Slate 不會聽它的。請重新取得配對碼。"
+                : "請先貼上配對碼（16 個字元）。"
+              : "還沒找到橋接程式。請確認 Claude 已經啟動而且設定好了；它啟動後這裡會自動連上。"}
         </p>
       )}
       <p className="muted small">
-        橋接程式不儲存任何資料，也只接受這個網站和這台電腦的連線。Claude 要刪除東西時，這個分頁會先跳出視窗問你。
+        橋接程式不儲存任何資料，只接受這個網站、而且知道配對碼的分頁；Slate 也只執行有配對碼簽章的指令。Claude 要刪除東西時，這個分頁會先跳出視窗問你。
         Claude 讀到的頁面內容會送給 Anthropic 處理。
       </p>
     </div>

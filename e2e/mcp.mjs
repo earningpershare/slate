@@ -3,16 +3,23 @@
 // Usage: npm run build && npm start, then: node e2e/mcp.mjs [url] [screenshotDir]
 import { chromium } from "playwright";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 
 const base = process.argv[2] ?? "http://localhost:5183/";
 const shots = process.argv[3];
 const PORT = 47811;
 const origin = new URL(base).origin;
+// its own secret, so the test never touches the pairing of the person's real bridge
+const env = { ...process.env, SLATE_MCP_PORT: String(PORT), SLATE_ORIGINS: origin, SLATE_MCP_SECRET_FILE: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "slate-mcp-")), "secret") };
+const CODE = /([0-9A-F]{4}-){3}[0-9A-F]{4}/.exec(spawnSync(process.execPath, ["public/slate-mcp.mjs", "pair"], { env, encoding: "utf8" }).stdout)[0];
 
 /** Start a copy of the bridge and talk JSON-RPC to it over its stdin/stdout. */
 function client() {
-  const child = spawn(process.execPath, ["public/slate-mcp.mjs"], { env: { ...process.env, SLATE_MCP_PORT: String(PORT), SLATE_ORIGINS: origin }, stdio: ["pipe", "pipe", "ignore"] });
+  const child = spawn(process.execPath, ["public/slate-mcp.mjs"], { env, stdio: ["pipe", "pipe", "ignore"] });
   const pending = new Map();
   let buffer = "";
   let next = 1;
@@ -93,7 +100,8 @@ await step("the bridge introduces itself and lists the same tools the app has", 
   assert.equal(init.result.protocolVersion, "2025-06-18");
   assert.match(init.result.instructions, /Slate workspace/);
   const { tools } = (await claude.request("tools/list")).result;
-  assert.ok(tools.length >= 12);
+  assert.ok(tools.length >= 13);
+  assert.match((await claude.tool("slate_pairing_code")).text, new RegExp("Pairing code: " + CODE));
   assert.deepEqual(tools.filter((t) => t.annotations?.destructiveHint).map((t) => t.name).sort(), ["delete_task", "trash_page"]);
   assert.ok(tools.every((t) => t.inputSchema.type === "object" && t.description.length > 30));
   assert.deepEqual((await claude.request("ping")).result, {});
@@ -103,6 +111,7 @@ await step("while Slate has not allowed it, a call explains what the person must
   const r = await claude.tool("list_tasks");
   assert.equal(r.isError, true);
   assert.match(r.text, /Slate is not connected.*允許這台電腦上的 Claude 連進來/s);
+  assert.ok(r.text.includes(CODE)); // and hands over the code to paste
 });
 
 await step("the person switches it on in Slate, and the tab finds the bridge", async () => {
@@ -113,6 +122,12 @@ await step("the person switches it on in Slate, and the tab finds the bridge", a
   const file = await fetch(new URL(href, base)).then((r) => r.text());
   assert.match(file, /^#!\/usr\/bin\/env node/); // the download is the bridge itself
   await page.locator(".ai-switch input").check();
+  // switched on, but not paired: the tab asks nothing of the bridge, and the bridge gives it nothing
+  await page.waitForSelector(".ai-bridge-state.unpaired >> text=請先貼上配對碼");
+  await page.fill(".ai-code", "0000-0000-0000-0000");
+  await page.waitForSelector(".ai-bridge-state.unpaired >> text=配對碼不符");
+  assert.match((await claude.tool("list_tasks")).text, /Slate is not connected/);
+  await page.fill(".ai-code", CODE.toLowerCase()); // typed sloppily
   await page.waitForSelector(".ai-bridge-state.connected");
   if (shots) await page.screenshot({ path: shots + "/mcp-01-connected.png" });
 });
@@ -176,14 +191,55 @@ await step("other websites and other programs cannot use the bridge", async () =
   const url = "http://127.0.0.1:" + PORT;
   // a page on another site: refused before anything is read
   assert.equal((await fetch(url + "/poll", { headers: { origin: "https://evil.example" } })).status, 403);
+  // the right site without the pairing code gets no work either
+  assert.equal((await fetch(url + "/poll?t=" + Date.now() + "&m=" + "0".repeat(64), { headers: { origin } })).status, 401);
+  assert.equal((await fetch(url + "/result", { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ id: "x", text: "forged", t: Date.now(), m: "0".repeat(64) }) })).status, 401);
   assert.equal((await fetch(url + "/result", { method: "POST", headers: { origin: "https://evil.example", "content-type": "application/json" }, body: "{}" })).status, 403);
   assert.equal((await fetch(url + "/poll")).status, 403); // no origin at all
   // the door for sibling copies needs the secret from the person's home folder, and no web page may use it
   assert.equal((await fetch(url + "/call", { method: "POST", headers: { "content-type": "application/json" }, body: '{"name":"list_tasks","input":{}}' })).status, 403);
-  assert.equal((await fetch(url + "/call", { method: "POST", headers: { "x-slate-mcp": "guess", "content-type": "application/json" }, body: "{}" })).status, 403);
-  // from the Slate page itself the browser's own check passes
-  const fromPage = await page.evaluate((u) => fetch(u + "/hello").then((r) => r.status), url);
-  assert.equal(fromPage, 204);
+  assert.equal((await fetch(url + "/call", { method: "POST", headers: { "x-slate-mcp": Date.now() + "." + "0".repeat(64), "content-type": "application/json" }, body: "{}" })).status, 403);
+});
+
+await step("a program squatting on the port cannot make Slate do anything", async () => {
+  // it answers like a bridge and hands out a call, but cannot sign with the pairing code
+  const got = [];
+  const impostor = http.createServer((req, res) => {
+    got.push(req.url);
+    const cors = { "access-control-allow-origin": origin, "access-control-allow-headers": "content-type", "access-control-allow-private-network": "true" };
+    if (req.method === "OPTIONS") return void res.writeHead(204, cors).end();
+    const body = req.url.startsWith("/hello") ? { mac: "f".repeat(64) } : { id: "1", name: "add_task", args: '{"title":"冒牌貨加的"}', mac: "f".repeat(64) };
+    res.writeHead(200, { ...cors, "content-type": "application/json" }).end(JSON.stringify(body));
+  });
+  await new Promise((r) => impostor.listen(PORT + 1, "127.0.0.1", r));
+  const victimCtx = await browser.newContext({ locale: "zh-TW" });
+  await victimCtx.addInitScript(
+    ([url, code]) => {
+      localStorage.setItem("slate:bridge", url);
+      localStorage.setItem("ai-bridge", "1");
+      localStorage.setItem("ai-bridge-code", code);
+    },
+    ["http://127.0.0.1:" + (PORT + 1), CODE],
+  );
+  const victim = await victimCtx.newPage();
+  await victim.goto(base);
+  await victim.waitForSelector(".page-title");
+  await victim.waitForTimeout(7000); // long enough for a couple of attempts
+  assert.ok(got.some((u) => u.startsWith("/hello")), "the tab never knocked");
+  assert.ok(!got.some((u) => u.startsWith("/poll")), "the tab asked an unproven program for work");
+  const tasks = await victim.evaluate(
+    () =>
+      new Promise((res) => {
+        const o = indexedDB.open("slate-workspace");
+        o.onsuccess = () => {
+          const q = o.result.transaction("tasks").objectStore("tasks").getAll();
+          q.onsuccess = () => (o.result.close(), res(q.result.map((t) => t.title)));
+        };
+      }),
+  );
+  assert.ok(!tasks.includes("冒牌貨加的"));
+  await victimCtx.close();
+  impostor.close();
 });
 
 await step("switching it off stops the tab from listening", async () => {

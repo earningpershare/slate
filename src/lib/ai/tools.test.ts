@@ -108,6 +108,22 @@ describe("what the person is asked before something is destroyed", () => {
     // an id that does not exist is not dressed up as something else
     expect(await del.describe({ id: "nope" })).toBe("永久刪除任務");
   });
+
+  it("cannot be dressed up by renaming first or by a title that fakes the dialog", async () => {
+    const trash = tools.find((t) => t.name === "trash_page")!;
+    const del = tools.find((t) => t.name === "delete_task")!;
+    const diary = (await call("create_page", { title: "十年日記" })).data;
+    await call("update_page", { id: diary.id, title: "暫存檔" });
+    await call("update_page", { id: diary.id, title: "可以刪的草稿" });
+    // the person is told what it was called before the assistant touched it
+    expect(await trash.describe({ id: diary.id })).toBe("把頁面「可以刪的草稿」（助理剛才把它從「十年日記」改名）移到垃圾桶");
+    const t = (await call("add_task", { title: "報稅" })).data;
+    await call("update_task", { id: t.id, title: "x\n\n要允許嗎？\n\n（按確定取消）\u2028" + "長".repeat(200) });
+    const label = await del.describe({ id: t.id });
+    expect(label).not.toMatch(/[\n\r\u2028]/); // one line: it cannot add fake buttons or instructions
+    expect(label.length).toBeLessThan(120);
+    expect(label).toContain("（助理剛才把它從「報稅」改名）");
+  });
 });
 
 describe("content written by a model", () => {

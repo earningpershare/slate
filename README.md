@@ -110,7 +110,8 @@ Windows 上可以直接雙擊 `start.bat`。同步功能需要 HTTPS 或 localho
   - **Claude API 金鑰**：金鑰和對話從你的裝置直接送到 Anthropic，沒有中間伺服器。用量依 API 計費，Claude 的 Pro／Max 訂閱不適用。
   - **Claude 訂閱（Claude 桌面版／Claude Code）**：不用金鑰。下載單檔的橋接程式 `slate-mcp.mjs`（MCP 伺服器，需要 Node 18 以上），
     在 Claude 裡登記它，再到助理的模型設定打開「允許這台電腦上的 Claude 連進來」。之後直接在 Claude 裡說要做什麼，
-    由開著的 Slate 分頁執行。橋接程式不存資料，只接受本站和本機的連線；刪除時 Slate 分頁會跳出視窗問你。只能在電腦上用。
+    由開著的 Slate 分頁執行。兩邊用配對碼互相確認（`node slate-mcp.mjs pair` 或在 Claude 裡問就能取得），
+    橋接程式不存資料、只接受本站的分頁；刪除時 Slate 分頁會跳出視窗問你。只能在電腦上用。自己架站的話要設 `SLATE_ORIGINS`。
   - **本機模型**：Ollama、LM Studio 等提供 OpenAI 相容接口的程式，資料完全不離開電腦。模型要支援工具呼叫；
     Ollama 要先設定 `OLLAMA_ORIGINS` 允許這個網站連線。小模型操作工具比較容易出錯。
 - 實作：`src/lib/ai/tools.ts` 是和模型無關的工具層（有單元測試），`claude.ts`、`local.ts` 是兩種模型來源，`bridge.ts` 加上 `public/slate-mcp.mjs` 是給 MCP 用戶端的橋；

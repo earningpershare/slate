@@ -9,6 +9,10 @@
 // listens when "allow Claude on this computer" is switched on in Slate's assistant settings,
 // and it still asks you before anything is deleted.
 //
+// Pairing: Slate only obeys a bridge that knows this computer's pairing code, and the bridge
+// only serves a tab that knows it. Get the code with `node slate-mcp.mjs pair` (or ask Claude
+// for "the Slate pairing code") and paste it into Slate once.
+//
 // Set-up (needs Node 18 or newer, no install step):
 //   Claude Code:     claude mcp add slate -- node /path/to/slate-mcp.mjs
 //   Claude Desktop:  add to claude_desktop_config.json
@@ -16,8 +20,8 @@
 //
 // Options (environment variables):
 //   SLATE_MCP_PORT   port on 127.0.0.1 (default 47800; Slate must be told the same)
-//   SLATE_ORIGINS    extra web addresses allowed to act as Slate, comma-separated
-//                    (default: https://slate.16888u.com and http://localhost:5183)
+//   SLATE_ORIGINS    extra web addresses allowed to act as Slate, comma-separated, for a
+//                    copy you host yourself or run locally (default: only https://slate.16888u.com)
 import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -26,7 +30,7 @@ import path from "node:path";
 
 const PORT = Number(process.env.SLATE_MCP_PORT || 47800);
 const ORIGINS = new Set(
-  ["https://slate.16888u.com", "http://localhost:5183", "http://127.0.0.1:5183", ...(process.env.SLATE_ORIGINS || "").split(",")].map((s) => s.trim().replace(/\/+$/, "")).filter(Boolean),
+  ["https://slate.16888u.com", ...(process.env.SLATE_ORIGINS || "").split(",")].map((s) => s.trim().replace(/\/+$/, "")).filter(Boolean),
 );
 const CALL_TIMEOUT = 180_000; // a confirmation may be waiting for the person
 const TAB_GRACE = 4_000; // how long a call waits for a tab to show up
@@ -421,7 +425,7 @@ const log = (...a) => process.stderr.write("[slate-mcp] " + a.join(" ") + "\n");
 // ---------- one secret shared by every copy of this program on this computer ----------
 // Several MCP clients may each start a copy. Only one can own the port; the others pass
 // their calls to it, proving with this secret that they are not a web page.
-const SECRET_FILE = path.join(os.homedir(), ".slate-mcp-secret");
+const SECRET_FILE = process.env.SLATE_MCP_SECRET_FILE || path.join(os.homedir(), ".slate-mcp-secret");
 function secret() {
   try {
     const s = fs.readFileSync(SECRET_FILE, "utf8").trim();
@@ -434,6 +438,18 @@ function secret() {
   return s;
 }
 const SECRET = secret();
+const hmac = (key, text) => crypto.createHmac("sha256", key).update(text).digest("hex");
+const same = (a, b) => typeof a === "string" && typeof b === "string" && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const fresh = (t) => Math.abs(Date.now() - Number(t)) < 120_000;
+// What the person pastes into Slate. Derived from the secret, so it is the same for every
+// copy of this program on this computer and never has to be stored anywhere else.
+const KEY = hmac(SECRET, "pairing-code").slice(0, 16).toUpperCase();
+const CODE = KEY.replace(/(.{4})(?=.)/g, "$1-");
+
+if (process.argv[2] === "pair") {
+  console.log("Slate pairing code for this computer:\n\n    " + CODE + "\n\nPaste it in Slate: AI 助理 → 模型設定 → Claude 訂閱 → 配對碼.");
+  process.exit(0);
+}
 
 // ---------- the side that talks to the Slate tab ----------
 const queue = []; // calls waiting for a tab: { id, name, input }
@@ -459,8 +475,10 @@ function park(res) {
     }
   });
 }
+/** Hand a call to the tab, signed so the tab can tell it comes from the paired bridge. */
 function give(res, call) {
-  res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(call));
+  const mac = hmac(KEY, `call:${call.id}:${call.name}:${call.args}`);
+  res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ...call, mac }));
 }
 function pump() {
   if (!parked || queue.length === 0) return;
@@ -485,14 +503,15 @@ function callTab(name, input) {
       resolve(result);
     };
     const noTab =
-      "Slate is not connected. Ask the person to open Slate in their browser on this computer (https://slate.16888u.com), go to AI 助理 → 模型設定 → Claude 訂閱, and switch on 「允許這台電腦上的 Claude 連進來」. Then try again.";
+      "Slate is not connected. Ask the person to open Slate in their browser on this computer (https://slate.16888u.com), go to AI 助理 → 模型設定 → Claude 訂閱, " +
+      `paste this pairing code there: ${CODE} , and switch on 「允許這台電腦上的 Claude 連進來」. Then try again.`;
     waiting.set(id, {
       resolve: finish,
       timer: setTimeout(() => finish({ text: "Slate did not answer in time (a confirmation may still be waiting for the person).", error: true }), CALL_TIMEOUT),
       // still not picked up, and no tab has asked for work lately: there is no tab
       grace: setInterval(() => queue.some((c) => c.id === id) && !parked && Date.now() - lastPoll > TAB_GRACE && finish({ text: noTab, error: true }), 1000),
     });
-    queue.push({ id, name, input });
+    queue.push({ id, name, args: JSON.stringify(input ?? {}) });
     pump();
   });
 }
@@ -508,13 +527,7 @@ function readBody(req, limit = 32 * 1024 * 1024) {
         req.destroy();
       } else chunks.push(c);
     });
-    req.on("end", () => {
-      try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"));
-      } catch (e) {
-        reject(e);
-      }
-    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
 }
@@ -523,12 +536,14 @@ const server = http.createServer(async (req, res) => {
   const origin = req.headers.origin;
   const url = new URL(req.url, "http://127.0.0.1");
   try {
-    // another copy of this program (no web page can send this header value)
+    // another copy of this program: it signs its request with the shared secret (never sends the secret itself)
     if (url.pathname === "/call" && req.method === "POST") {
-      if (origin || req.headers["x-slate-mcp"] !== SECRET) return void res.writeHead(403).end();
-      const { name, input } = await readBody(req);
+      const [t, mac] = String(req.headers["x-slate-mcp"] ?? "").split(".");
+      const raw = await readBody(req);
+      if (origin || !fresh(t) || !same(mac, hmac(SECRET, `call:${t}:${raw}`))) return void res.writeHead(403).end();
+      const { name, input } = JSON.parse(raw);
       const result = await callTab(String(name), input);
-      return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(result));
+      return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ...result, mac: hmac(SECRET, `reply:${t}:${result.text}`) }));
     }
     // everything else is for the Slate tab, and only for it
     if (!origin || !ORIGINS.has(origin)) return void res.writeHead(403).end();
@@ -542,15 +557,23 @@ const server = http.createServer(async (req, res) => {
     };
     for (const [k, v] of Object.entries(cors)) res.setHeader(k, v);
     if (req.method === "OPTIONS") return void res.writeHead(204).end();
-    // "are you there?", answered at once
-    if (url.pathname === "/hello" && req.method === "GET") return void res.writeHead(204).end();
+    // "are you the bridge I am paired with?": prove it by signing the tab's random number
+    if (url.pathname === "/hello" && req.method === "GET") {
+      const n = url.searchParams.get("n") ?? "";
+      if (!/^[0-9a-f]{16,64}$/.test(n)) return void res.writeHead(400).end();
+      return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ mac: hmac(KEY, "hello:" + n) }));
+    }
     if (url.pathname === "/poll" && req.method === "GET") {
+      // only a tab that knows the pairing code gets work
+      const t = url.searchParams.get("t") ?? "";
+      if (!fresh(t) || !same(url.searchParams.get("m"), hmac(KEY, "poll:" + t))) return void res.writeHead(401).end();
       lastPoll = Date.now();
       if (queue.length) return void give(res, queue.shift());
       return void park(res);
     }
     if (url.pathname === "/result" && req.method === "POST") {
-      const { id, text, error } = await readBody(req);
+      const { id, text, error, t, m } = JSON.parse(await readBody(req));
+      if (!fresh(t) || !same(m, hmac(KEY, `result:${id}:${t}`))) return void res.writeHead(401).end();
       waiting.get(String(id))?.resolve({ text: String(text ?? ""), error: !!error });
       return void res.writeHead(204).end();
     }
@@ -577,12 +600,18 @@ function listen() {
 async function run(name, input) {
   if (!owner && !(await listen())) {
     try {
+      const t = String(Date.now());
+      const raw = JSON.stringify({ name, input });
       const res = await fetch(`http://127.0.0.1:${PORT}/call`, {
         method: "POST",
-        headers: { "content-type": "application/json", "x-slate-mcp": SECRET },
-        body: JSON.stringify({ name, input }),
+        headers: { "content-type": "application/json", "x-slate-mcp": t + "." + hmac(SECRET, `call:${t}:${raw}`) },
+        body: raw,
       });
-      if (res.ok) return await res.json();
+      if (res.ok) {
+        // whoever holds the port must prove it is one of us before its answer is believed
+        const reply = await res.json();
+        if (same(reply.mac, hmac(SECRET, `reply:${t}:${reply.text}`))) return { text: String(reply.text), error: !!reply.error };
+      }
       return { text: `Port ${PORT} on this computer is used by another program, so Slate cannot be reached. Set SLATE_MCP_PORT to a free port here and in Slate.`, error: true };
     } catch {
       return { text: "Could not reach the Slate bridge on this computer. Try again in a moment.", error: true };
@@ -609,9 +638,21 @@ async function handle(msg) {
     case "ping":
       return reply({});
     case "tools/list":
-      return reply({ tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.schema, ...(t.danger ? { annotations: { destructiveHint: true } } : {}) })) });
+      return reply({
+        tools: [
+          ...TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.schema, ...(t.danger ? { annotations: { destructiveHint: true } } : {}) })),
+          {
+            name: "slate_pairing_code",
+            description: "Show the pairing code the person pastes into Slate (AI 助理 → 模型設定 → Claude 訂閱) to connect Slate to this computer's Claude. Use it when they ask for the code or when a Slate tool says it is not connected.",
+            inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false },
+          },
+        ],
+      });
     case "tools/call": {
       const name = String(params?.name ?? "");
+      if (name === "slate_pairing_code") {
+        return reply({ content: [{ type: "text", text: `Pairing code: ${CODE}\nPaste it in Slate: AI 助理 → 模型設定 → Claude 訂閱 → 配對碼, then switch on 「允許這台電腦上的 Claude 連進來」.` }], isError: false });
+      }
       if (!TOOLS.some((t) => t.name === name)) return fail(-32602, `Unknown tool: ${name}`);
       const result = await run(name, params?.arguments ?? {});
       return reply({ content: [{ type: "text", text: result.text }], isError: !!result.error });
