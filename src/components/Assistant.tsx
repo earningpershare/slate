@@ -90,7 +90,7 @@ function Setup({ initial, onSave, onCancel }: { initial: AiSettings; onSave: (s:
           </label>
           <p className="muted small">
             適用 Ollama、LM Studio 等在自己電腦上執行的模型，資料完全不離開這台電腦。模型要支援工具呼叫（tools）。 Ollama 需要先允許這個網站連線：設定環境變數
-            OLLAMA_ORIGINS={location.origin} 後重新啟動 Ollama。小模型操作工具的能力比 Claude 弱，複雜的要求比較容易出錯。
+            OLLAMA_ORIGINS={location.origin} 後重新啟動 Ollama。第一次使用時瀏覽器會問是否允許這個網站連線到這台裝置上的應用程式，請按允許。小模型操作工具的能力比 Claude 弱，複雜的要求比較容易出錯。
           </p>
         </>
       )}

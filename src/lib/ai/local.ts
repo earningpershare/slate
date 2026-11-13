@@ -33,7 +33,8 @@ export function createLocal(settings: AiSettings, tools: Tool[]): Assistant {
     } catch (e) {
       if ((e as Error).name === "AbortError") throw e;
       throw new AiError(
-        `連不上 ${base}。請確認模型程式有在執行，而且允許這個網站連線（Ollama 要設定環境變數 OLLAMA_ORIGINS=${location.origin} 後重新啟動）。`,
+        `連不上 ${base}。請檢查三件事：一、模型程式有在執行；二、它允許這個網站連線（Ollama 要設定環境變數 OLLAMA_ORIGINS=${location.origin} 後重新啟動）；` +
+          `三、瀏覽器問「是否允許這個網站連線到這台裝置上的應用程式」時要按允許（按錯的話，到網址列左邊的網站設定把「本機網路存取」改成允許）。`,
       );
     }
     if (!res.ok) {

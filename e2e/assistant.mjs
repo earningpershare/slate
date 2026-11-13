@@ -52,7 +52,9 @@ const server = http.createServer((req, res) => {
 await new Promise((r) => server.listen(MOCK, r));
 
 // ---------- the browser ----------
-const browser = await chromium.launch({ channel: "msedge" });
+// A public https site reaching a server on localhost makes the browser ask the person for
+// permission ("local network access"). Nobody is there to click in a test, so the check is off here.
+const browser = await chromium.launch({ channel: "msedge", args: ["--disable-features=LocalNetworkAccessChecks"] });
 const page = await (await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "zh-TW" })).newPage();
 page.setDefaultTimeout(15_000);
 const errors = [];
