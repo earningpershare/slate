@@ -18,11 +18,22 @@ const iphone = await open({
   userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
 });
 // a phone lands on the download page, with the button waiting until the profile can be served properly
-await iphone.waitForSelector(".landing a.landing-main", { timeout: 60_000 });
-const href = await iphone.locator(".landing a.landing-main").getAttribute("href");
+await iphone.waitForSelector(".landing-download");
+if (process.argv[3]) await iphone.screenshot({ path: process.argv[3] + "/landing-home.png" });
+await iphone.locator(".landing-download").tap();
+// the app's own page: the button there is the profile itself
+await iphone.waitForSelector(".get a.get-btn", { timeout: 60_000 });
+const href = await iphone.locator(".get a.get-btn").getAttribute("href");
+const broken = await iphone.evaluate(async () => {
+  const imgs = [...document.querySelectorAll(".get img")];
+  await Promise.all(imgs.map((i) => i.decode().catch(() => undefined)));
+  return imgs.filter((i) => !i.naturalWidth).map((i) => i.getAttribute("src"));
+});
+assert.deepEqual(broken, [], "pictures missing on the app page");
+assert.equal(await iphone.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "page scrolls sideways");
 assert.equal(href, "slate.mobileconfig");
 assert.equal(await iphone.locator(".page-title").count(), 0);
-if (process.argv[3]) await iphone.screenshot({ path: process.argv[3] + "/landing-iphone.png" });
+if (process.argv[3]) await iphone.screenshot({ path: process.argv[3] + "/landing-detail.png", fullPage: false });
 console.log("ok   iPhone Safari lands on the download page");
 
 // once the app's service worker is in charge, the profile arrives with Apple's content type
@@ -54,7 +65,11 @@ const chromeIos = await open({
   viewport: { width: 390, height: 844 },
   userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/126.0 Mobile/15E148 Safari/604.1",
 });
-await chromeIos.waitForSelector(".landing >> text=改用 Safari 開啟");
+// inside Messenger, LINE, Chrome...: the button hands the address over to Safari
+await chromeIos.locator(".landing-download").click();
+await chromeIos.waitForSelector(".get-panel.warn");
+assert.match(await chromeIos.locator(".get a.get-btn").getAttribute("href"), /^x-safari-https?:\/\//);
+if (process.argv[3]) await chromeIos.screenshot({ path: process.argv[3] + "/landing-inapp.png" });
 
 const desktop = await open({ viewport: { width: 1280, height: 800 } });
 await desktop.waitForSelector(".page-title"); // a computer goes straight to the app
