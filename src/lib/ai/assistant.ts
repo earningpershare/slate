@@ -84,7 +84,7 @@ export async function runTool(tools: Tool[], name: string, input: unknown, hooks
   const id = "t" + ++counter;
   let label = name;
   try {
-    if (tool && input && typeof input === "object") label = tool.describe(input as Record<string, unknown>);
+    if (tool && input && typeof input === "object") label = await tool.describe(input as Record<string, unknown>);
   } catch {
     /* a malformed input: callTool reports it below */
   }

@@ -121,7 +121,7 @@ await step("local model: a request becomes a real task, and the reply says so", 
 
 await step("deleting asks first: declined leaves it, allowed removes it", async () => {
   await say("把它刪掉");
-  await page.waitForSelector(".ai-confirm >> text=要讓助理永久刪除任務嗎？");
+  await page.waitForSelector(".ai-confirm >> text=要讓助理永久刪除任務「買牛奶」嗎？"); // names what would go
   assert.ok((await store("tasks")).some((t) => t.title === "買牛奶")); // nothing happened yet
   if (shots) await page.screenshot({ path: shots + "/ai-02-confirm.png" });
   await page.locator(".ai-confirm .btn", { hasText: "不要" }).click();
