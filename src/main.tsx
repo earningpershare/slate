@@ -20,7 +20,7 @@ void startLink(db);
 followPairLink(); // arriving from the link Claude gave: pair first
 startBridge();
 // the same link opened in a tab that already shows Slate changes only the address
-window.addEventListener("hashchange", () => followPairLink() && startBridge());
+window.addEventListener("hashchange", () => void followPairLink());
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

@@ -93,7 +93,9 @@ async function loop(mine: number, signal: AbortSignal) {
       set("connected");
       wait = 2000;
       const t = Date.now();
-      const res = await fetch(`${url}/poll?t=${t}&m=${await sign("poll:" + t)}`, { cache: "no-store", signal });
+      // v: is this the tab the person is looking at? With several Slate tabs open, the bridge asks that one first.
+      const v = document.visibilityState === "visible" ? 1 : 0;
+      const res = await fetch(`${url}/poll?t=${t}&m=${await sign("poll:" + t)}&v=${v}`, { cache: "no-store", signal });
       if (mine !== run) return;
       if (res.status === 401) {
         set("unpaired");
@@ -170,28 +172,60 @@ export function setBridgeCode(code: string) {
   startBridge();
 }
 
+/** Does the program on the bridge port prove that it holds this code? */
+async function bridgeHolds(code: string): Promise<boolean> {
+  try {
+    const n = randomHex();
+    const res = await fetch(`${bridgeUrl()}/hello?n=${n}`, { cache: "no-store" });
+    if (!res.ok) return false;
+    const { mac } = (await res.json()) as { mac?: string };
+    return mac === (await (await signer(code))("hello:" + n));
+  } catch {
+    return false;
+  }
+}
+
 /**
- * The link Claude hands over ("…/#/pair/CODE"): ask the person once, then remember the code and
- * start listening. Returns true when the address was such a link, whatever they answered.
+ * The link Claude hands over ("…/#/pair/CODE"). Anyone can make such a link, so it is only a
+ * request: the person is asked (and shown the end of the code, which Claude shows too), a code
+ * that would replace an existing pairing gets a plain warning, and the code is kept only if the
+ * program on this computer's bridge port proves it holds that very code.
+ * Returns true when the address was such a link, whatever came of it.
  */
 export function followPairLink(): boolean {
   const m = /^#\/pair\/([0-9A-Fa-f-]{16,19})$/.exec(location.hash);
   if (!m) return false;
   // out of the address bar and the history at once
   history.replaceState(null, "", location.pathname + location.search + "#/home");
-  if (!validCode(m[1])) return true;
+  const code = m[1];
+  if (!validCode(code) || !crypto.subtle) return true;
+  // a page that some other page opened and can still steer is not the place to pair
+  if (window.opener) return true;
+  const tail = normalCode(code).slice(-4);
+  const current = bridgeCode();
+  const replacing = validCode(current) && normalCode(current) !== normalCode(code);
   const ok = window.confirm(
-    "要讓這台電腦上的 Claude 連進這個 Slate 嗎？\n\nClaude 將可以讀取和修改這裡的筆記與任務；刪除前仍會先問你。\n只有在你剛從自己的 Claude 點了連結時才按確定。",
+    (replacing
+      ? "注意：這個 Slate 已經和這台電腦上的 Claude 配對過，這個連結卻帶著不同的配對碼。\n如果你沒有重新安裝 Claude 的 Slate 擴充功能，請按「取消」。\n\n"
+      : "") +
+      `要讓這台電腦上的 Claude 連進這個 Slate 嗎？（配對碼末四碼：${tail}，應該和 Claude 顯示的相同）\n\n` +
+      "Claude 將可以讀取和修改這裡的筆記與任務；刪除前仍會先問你。\n只有在你剛從自己的 Claude 點了連結時才按確定。",
   );
-  if (ok) {
+  if (!ok) return true;
+  void bridgeHolds(code).then((genuine) => {
+    if (!genuine) {
+      toast("沒有連上：這台電腦上找不到對應這個連結的 Claude 擴充功能。請確認 Claude 桌面版開著，再點一次連結。");
+      return;
+    }
     try {
-      localStorage.setItem(CODE_KEY, m[1]);
+      localStorage.setItem(CODE_KEY, code);
       localStorage.setItem(KEY, "1");
     } catch {
       /* storage unavailable */
     }
-    setTimeout(() => toast("已連接 Claude。現在可以回到 Claude 繼續。"), 800);
-  }
+    startBridge();
+    toast("已連接 Claude。現在可以回到 Claude 繼續。");
+  });
   return true;
 }
 

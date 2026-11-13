@@ -103,7 +103,9 @@ await step("the bridge introduces itself and lists the same tools the app has", 
   const { tools } = (await claude.request("tools/list")).result;
   assert.ok(tools.length >= 13);
   // asking to connect gets a link to click, not a command to run
-  assert.ok((await claude.tool("slate_connect")).text.includes(LINK));
+  const connect = (await claude.tool("slate_connect")).text;
+  assert.ok(connect.includes(LINK));
+  assert.ok(connect.includes("ending in " + CODE.slice(-4))); // so the person can compare with Slate's question
   assert.deepEqual(tools.filter((t) => t.annotations?.destructiveHint).map((t) => t.name).sort(), ["delete_task", "trash_page"]);
   assert.ok(tools.every((t) => t.inputSchema.type === "object" && t.description.length > 30));
   assert.deepEqual((await claude.request("ping")).result, {});
@@ -142,6 +144,17 @@ await step("a link the person refuses connects nothing", async () => {
   assert.match((await claude.tool("list_tasks")).text, /Slate is not connected yet/);
 });
 
+await step("a made-up link is not believed even when the person says yes", async () => {
+  // anyone can write such a link; nothing on this computer holds this code
+  const other = await ctx.newPage();
+  other.once("dialog", (d) => void d.accept());
+  await other.goto(base + "#/pair/0123-4567-89AB-CDEF");
+  await other.waitForSelector(".toast >> text=沒有連上");
+  assert.equal(await other.evaluate(() => localStorage.getItem("ai-bridge")), null);
+  assert.equal(await other.evaluate(() => localStorage.getItem("ai-bridge-code")), null);
+  await other.close();
+});
+
 await step("opening the link Claude gave, and saying yes, is all it takes to connect", async () => {
   let asked = "";
   page.once("dialog", (d) => {
@@ -151,6 +164,8 @@ await step("opening the link Claude gave, and saying yes, is all it takes to con
   await page.goto(LINK); // this tab already shows Slate: the link takes effect without a reload
   await page.waitForSelector(".page-title, .home");
   assert.match(asked, /要讓這台電腦上的 Claude 連進這個 Slate 嗎/);
+  assert.ok(asked.includes("配對碼末四碼：" + CODE.slice(-4)));
+  assert.ok(!asked.includes("注意"));
   await page.waitForSelector(".toast >> text=已連接 Claude");
   // no code typed, no switch found: the settings simply show it as connected
   await page.locator(".ai-setup .seg-btn", { hasText: "Claude 訂閱" }).click();
@@ -267,6 +282,36 @@ await step("a program squatting on the port cannot make Slate do anything", asyn
   assert.ok(!tasks.includes("冒牌貨加的"));
   await victimCtx.close();
   impostor.close();
+});
+
+await step("a link with a different code cannot quietly replace the pairing", async () => {
+  const other = await ctx.newPage();
+  let asked = "";
+  other.once("dialog", (d) => {
+    asked = d.message();
+    void d.accept(); // even a careless yes
+  });
+  await other.goto(base + "#/pair/FEDC-BA98-7654-3210");
+  await other.waitForSelector(".toast >> text=沒有連上");
+  assert.match(asked, /^注意：這個 Slate 已經和這台電腦上的 Claude 配對過/);
+  assert.equal(await other.evaluate(() => localStorage.getItem("ai-bridge-code")), CODE); // the real pairing stands
+  await other.close();
+  assert.equal((await claude.tool("list_tasks")).isError, false); // and still works
+});
+
+await step("with Slate open in two tabs, every call is still answered exactly once", async () => {
+  const second = await ctx.newPage();
+  await second.goto(base);
+  await second.waitForSelector(".page-title, .home");
+  await second.waitForTimeout(1500); // both tabs are now waiting for work
+  const before = (await store("tasks")).length;
+  for (let n = 0; n < 6; n++) assert.equal((await claude.tool("add_task", { title: "兩個分頁 " + n })).isError, false);
+  assert.equal((await store("tasks")).length, before + 6);
+  await second.close();
+  // the tab that is left carries on at once
+  const started = Date.now();
+  assert.equal((await claude.tool("list_tasks")).isError, false);
+  assert.ok(Date.now() - started < 5000, "a call waited on a tab that had closed");
 });
 
 await step("switching it off stops the tab from listening", async () => {

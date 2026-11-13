@@ -450,7 +450,7 @@ const CODE = KEY.replace(/(.{4})(?=.)/g, "$1-");
 // The code sits after the "#", which browsers never send to any server.
 const SLATE_URL = (process.env.SLATE_URL || "https://slate.16888u.com/").replace(/#.*$/, "");
 const LINK = SLATE_URL + "#/pair/" + CODE;
-const CONNECT = `To connect, the person opens this link in the browser where they use Slate, and confirms there: ${LINK}`;
+const CONNECT = `To connect, the person opens this link in the browser where they use Slate, and confirms there: ${LINK}\nTell them: Slate will ask for confirmation and show a pairing code ending in ${CODE.slice(-4)}; they should press OK only if it shows that ending.`;
 
 if (process.argv[2] === "pair") {
   console.log("Open this link in the browser where you use Slate:\n\n    " + LINK + "\n\nOr paste this pairing code in Slate (AI 助理 → 模型設定 → Claude 訂閱 → 進階):\n\n    " + CODE);
@@ -460,26 +460,23 @@ if (process.argv[2] === "pair") {
 // ---------- the side that talks to the Slate tab ----------
 const queue = []; // calls waiting for a tab: { id, name, input }
 const waiting = new Map(); // id -> { resolve, timer }
-let parked = null; // a tab's open long-poll: { res, timer }
+// Slate may be open in several tabs, each with a long-poll waiting here: { res, timer, visible }
+const parked = new Set();
 let lastPoll = 0;
 
-function park(res) {
-  if (parked) {
-    clearTimeout(parked.timer);
-    parked.res.writeHead(204).end();
-  }
-  const timer = setTimeout(() => {
-    if (parked?.res === res) parked = null;
-    res.writeHead(204).end();
-  }, 25_000);
-  parked = { res, timer };
+function park(res, visible) {
+  const entry = { res, visible, timer: setTimeout(() => release(entry, true), 25_000) };
+  parked.add(entry);
   res.on("close", () => {
-    lastPoll = Date.now(); // the tab was here until this moment
-    if (parked?.res === res) {
-      clearTimeout(timer);
-      parked = null;
-    }
+    lastPoll = Date.now(); // a tab was here until this moment
+    release(entry, false);
   });
+}
+/** Take a waiting poll off the list; answer it with "nothing for now" unless it is being used or has gone. */
+function release(entry, answer) {
+  if (!parked.delete(entry)) return;
+  clearTimeout(entry.timer);
+  if (answer && !entry.res.writableEnded) entry.res.writeHead(204).end();
 }
 /** Hand a call to the tab, signed so the tab can tell it comes from the paired bridge. */
 function give(res, call) {
@@ -487,11 +484,14 @@ function give(res, call) {
   res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ...call, mac }));
 }
 function pump() {
-  if (!parked || queue.length === 0) return;
-  const { res, timer } = parked;
-  clearTimeout(timer);
-  parked = null;
-  give(res, queue.shift());
+  while (queue.length && parked.size) {
+    // the tab the person is looking at goes first: a confirmation should appear where they are
+    const live = [...parked].filter((e) => !e.res.destroyed && !e.res.writableEnded);
+    const entry = live.find((e) => e.visible) ?? live[0];
+    if (!entry) return void parked.clear();
+    release(entry, false);
+    give(entry.res, queue.shift());
+  }
 }
 
 /** Hand a call to the tab and wait for its answer. */
@@ -511,12 +511,13 @@ function callTab(name, input) {
     const noTab =
       "Slate is not connected yet. Show the person this link as a clickable link and ask them to open it (in the browser where they use Slate) and press OK there; then try again. " +
       "If they already connected before, Slate just needs to be open in that browser. Link: " +
-      LINK;
+      LINK +
+      ` (Slate's confirmation will show a pairing code ending in ${CODE.slice(-4)}.)`;
     waiting.set(id, {
       resolve: finish,
       timer: setTimeout(() => finish({ text: "Slate did not answer in time (a confirmation may still be waiting for the person).", error: true }), CALL_TIMEOUT),
       // still not picked up, and no tab has asked for work lately: there is no tab
-      grace: setInterval(() => queue.some((c) => c.id === id) && !parked && Date.now() - lastPoll > TAB_GRACE && finish({ text: noTab, error: true }), 1000),
+      grace: setInterval(() => queue.some((c) => c.id === id) && parked.size === 0 && Date.now() - lastPoll > TAB_GRACE && finish({ text: noTab, error: true }), 1000),
     });
     queue.push({ id, name, args: JSON.stringify(input ?? {}) });
     pump();
@@ -576,7 +577,7 @@ const server = http.createServer(async (req, res) => {
       if (!fresh(t) || !same(url.searchParams.get("m"), hmac(KEY, "poll:" + t))) return void res.writeHead(401).end();
       lastPoll = Date.now();
       if (queue.length) return void give(res, queue.shift());
-      return void park(res);
+      return void park(res, url.searchParams.get("v") === "1");
     }
     if (url.pathname === "/result" && req.method === "POST") {
       const { id, text, error, t, m } = JSON.parse(await readBody(req));
