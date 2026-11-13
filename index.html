@@ -10,6 +10,12 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#fbfaf7" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <script>
+      // installing, offline use and device sync all need a secure address
+      if (location.protocol === "http:" && !/^(localhost|127\.|\[::1\])/.test(location.host)) {
+        location.replace("https://" + location.host + location.pathname + location.search + location.hash);
+      }
+    </script>
     <title>Slate 離線工作區</title>
   </head>
   <body>

@@ -16,7 +16,7 @@
 			<key>Precomposed</key>
 			<true/>
 			<key>URL</key>
-			<string>https://earningpershare.github.io/slate/</string>
+			<string>https://slate.16888u.com/</string>
 			<key>Icon</key>
 			<data>
 				iVBORw0KGgoAAAANSUhEUgAAALQAAAC0CAIAAACyr5FlAAAD80lEQVR4nOzdP2hdZRjH
@@ -47,7 +47,7 @@
 			<key>PayloadDescription</key>
 			<string>在主畫面加入 Slate。</string>
 			<key>PayloadIdentifier</key>
-			<string>io.github.earningpershare.slate.webclip</string>
+			<string>com.16888u.slate.webclip</string>
 			<key>PayloadType</key>
 			<string>com.apple.webClip.managed</string>
 			<key>PayloadUUID</key>
@@ -61,7 +61,7 @@
 	<key>PayloadDescription</key>
 	<string>把 Slate（離線筆記、資料庫與待辦）加到主畫面。這個描述檔只會新增一個圖示，不會更改任何設定，也不會讀取裝置上的資料；隨時可以在「設定 → 一般 → VPN 與裝置管理」移除。</string>
 	<key>PayloadIdentifier</key>
-	<string>io.github.earningpershare.slate</string>
+	<string>com.16888u.slate</string>
 	<key>PayloadOrganization</key>
 	<string>Slate (open source)</string>
 	<key>PayloadRemovalDisallowed</key>

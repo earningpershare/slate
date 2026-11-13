@@ -3,7 +3,7 @@
 // Usage: node scripts/make-profile.mjs [url]     (run again if the address or icon changes)
 import fs from "node:fs";
 
-const url = process.argv[2] ?? "https://earningpershare.github.io/slate/";
+const url = process.argv[2] ?? "https://slate.16888u.com/";
 const icon = fs.readFileSync("public/apple-touch-icon.png").toString("base64").replace(/(.{68})/g, "$1\n\t\t\t\t");
 // fixed ids: installing a newer copy of the profile replaces the old one instead of adding a second icon
 const xml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -34,7 +34,7 @@ const xml = `<?xml version="1.0" encoding="UTF-8"?>
 			<key>PayloadDescription</key>
 			<string>在主畫面加入 Slate。</string>
 			<key>PayloadIdentifier</key>
-			<string>io.github.earningpershare.slate.webclip</string>
+			<string>com.16888u.slate.webclip</string>
 			<key>PayloadType</key>
 			<string>com.apple.webClip.managed</string>
 			<key>PayloadUUID</key>
@@ -48,7 +48,7 @@ const xml = `<?xml version="1.0" encoding="UTF-8"?>
 	<key>PayloadDescription</key>
 	<string>把 Slate（離線筆記、資料庫與待辦）加到主畫面。這個描述檔只會新增一個圖示，不會更改任何設定，也不會讀取裝置上的資料；隨時可以在「設定 → 一般 → VPN 與裝置管理」移除。</string>
 	<key>PayloadIdentifier</key>
-	<string>io.github.earningpershare.slate</string>
+	<string>com.16888u.slate</string>
 	<key>PayloadOrganization</key>
 	<string>Slate (open source)</string>
 	<key>PayloadRemovalDisallowed</key>

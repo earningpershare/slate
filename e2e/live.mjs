@@ -3,7 +3,7 @@
 import { chromium } from "playwright";
 import assert from "node:assert/strict";
 
-const base = process.argv[2] ?? "https://earningpershare.github.io/slate/";
+const base = process.argv[2] ?? "https://slate.16888u.com/";
 const browser = await chromium.launch({ channel: "msedge" });
 const errors = [];
 const open = async (name) => {
