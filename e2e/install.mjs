@@ -65,11 +65,26 @@ const chromeIos = await open({
   viewport: { width: 390, height: 844 },
   userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/126.0 Mobile/15E148 Safari/604.1",
 });
-// inside Messenger, LINE, Chrome...: the button hands the address over to Safari
+// Chrome on an iPhone: hand over to Safari, or add to the home screen from its share menu
 await chromeIos.locator(".landing-download").click();
-await chromeIos.waitForSelector(".get-panel.warn");
+await chromeIos.waitForSelector(".get-panel >> text=加入主畫面");
 assert.match(await chromeIos.locator(".get a.get-btn").getAttribute("href"), /^x-safari-https?:\/\//);
-if (process.argv[3]) await chromeIos.screenshot({ path: process.argv[3] + "/landing-inapp.png" });
+if (process.argv[3]) await chromeIos.screenshot({ path: process.argv[3] + "/landing-chrome.png" });
+
+// a window inside Messenger can do neither: only the hand-over to Safari
+const messenger = await open({
+  viewport: { width: 390, height: 844 },
+  userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 [FBAN/MessengerLiteForiOS;FBAV/460.0]",
+});
+await messenger.locator(".landing-download").click();
+await messenger.waitForSelector(".get-panel.warn");
+assert.match(await messenger.locator(".get a.get-btn").getAttribute("href"), /^x-safari-https?:\/\//);
+
+// someone already using it in the browser gets back to the download page from the small bar
+await chromeIos.locator(".landing-skip").click();
+await chromeIos.waitForSelector(".install-bar a.btn");
+await chromeIos.locator(".install-bar a.btn").click();
+await chromeIos.waitForSelector(".landing-download");
 
 const desktop = await open({ viewport: { width: 1280, height: 800 } });
 await desktop.waitForSelector(".page-title"); // a computer goes straight to the app

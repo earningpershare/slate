@@ -3,7 +3,7 @@
 //   iPhone / iPad                                 a configuration profile that puts Slate on the
 //                                                 home screen (public/slate.mobileconfig)
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { ChevronLeft, Download, RefreshCw, Smartphone, X } from "lucide-react";
+import { ChevronLeft, Download, RefreshCw, Share, Smartphone, X } from "lucide-react";
 
 interface InstallPrompt extends Event {
   prompt(): Promise<void>;
@@ -28,10 +28,12 @@ const standalone = () =>
   window.matchMedia("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone === true;
 const isApple = () =>
   /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
-/** on iPhone only Safari can install a profile */
-const isSafari = () => !/CriOS|FxiOS|EdgiOS|OPiOS|Line\/|FBAN|FBAV|Instagram/.test(navigator.userAgent);
+/** another real browser on iPhone (Chrome, Edge, Firefox...): no profiles, but it can add to the home screen */
+const isOtherBrowser = () => /CriOS|FxiOS|EdgiOS|OPiOS|DuckDuckGo|Brave/.test(navigator.userAgent);
+/** a window inside another app (Messenger, LINE, Instagram...): it can install nothing */
+const isInApp = () => /FBAN|FBAV|FB_IAB|Instagram|Line\/|MicroMessenger|KAKAOTALK/.test(navigator.userAgent) || !/Safari\//.test(navigator.userAgent);
 
-type Way = "prompt" | "profile" | "open-safari" | null;
+type Way = "prompt" | "profile" | "ios-share" | "open-safari" | null;
 function useInstallWay(): Way {
   const prompt = useSyncExternalStore(
     (l) => {
@@ -42,7 +44,7 @@ function useInstallWay(): Way {
   );
   if (standalone()) return null;
   if (prompt) return "prompt";
-  if (isApple()) return isSafari() ? "profile" : "open-safari";
+  if (isApple()) return isOtherBrowser() ? "ios-share" : isInApp() ? "open-safari" : "profile";
   return null;
 }
 
@@ -64,20 +66,19 @@ function InstallAction({ way, onDone }: { way: Exclude<Way, null>; onDone?: () =
       </button>
     );
   }
-  if (way === "profile") {
-    return (
-      <a className="btn primary" href={PROFILE}>
-        <Download size={15} /> 下載描述檔
-      </a>
-    );
-  }
-  return null;
+  // on an iPhone the download page explains the steps for the browser at hand
+  return (
+    <a className="btn primary" href="?get">
+      <Download size={15} /> 安裝
+    </a>
+  );
 }
 
 const HINT: Record<Exclude<Way, null>, string> = {
   prompt: "把 Slate 安裝到這台裝置，之後不連網也能開。",
-  profile: "安裝到 iPhone：下載描述檔 → 打開「設定」→ 最上方「已下載描述檔」→「安裝」。完成後主畫面就會有 Slate。",
-  "open-safari": "要安裝到 iPhone，請改用 Safari 開啟這個網址。",
+  profile: "把 Slate 裝到主畫面，之後不連網也能開。",
+  "ios-share": "把 Slate 裝到主畫面，之後不連網也能開。",
+  "open-safari": "把 Slate 裝到主畫面，之後不連網也能開。",
 };
 
 /** A bar offered once to people using Slate in a browser tab. */
@@ -278,7 +279,7 @@ export function Landing({ onContinue }: { onContinue: () => void }) {
       >
         取得
       </button>
-    ) : way === "open-safari" ? (
+    ) : way === "open-safari" || way === "ios-share" ? (
       <a className="get-btn" href={"x-safari-" + address}>
         用 Safari 開啟
       </a>
@@ -315,6 +316,20 @@ export function Landing({ onContinue }: { onContinue: () => void }) {
           <button className="btn" onClick={() => void copy()}>
             {copied ? "已複製，請到 Safari 貼上" : "複製網址"}
           </button>
+        </div>
+      )}
+
+      {way === "ios-share" && (
+        <div className="get-panel">
+          <b>你現在用的不是 Safari（是 Chrome、Edge 這類瀏覽器）</b>
+          <span>兩種裝法擇一：</span>
+          <ol>
+            <li>按上面的「用 Safari 開啟」，到 Safari 後再按一次「取得」。</li>
+            <li>
+              或直接在這裡裝：按網址列旁的分享鈕 <Share size={15} style={{ verticalAlign: "-2px" }} />，往下找「加入主畫面」，再按「加入」。
+            </li>
+          </ol>
+          <span>Safari 的圖示是藍色指南針，網址列在畫面最下方。</span>
         </div>
       )}
 
