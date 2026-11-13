@@ -170,6 +170,31 @@ export function setBridgeCode(code: string) {
   startBridge();
 }
 
+/**
+ * The link Claude hands over ("…/#/pair/CODE"): ask the person once, then remember the code and
+ * start listening. Returns true when the address was such a link, whatever they answered.
+ */
+export function followPairLink(): boolean {
+  const m = /^#\/pair\/([0-9A-Fa-f-]{16,19})$/.exec(location.hash);
+  if (!m) return false;
+  // out of the address bar and the history at once
+  history.replaceState(null, "", location.pathname + location.search + "#/home");
+  if (!validCode(m[1])) return true;
+  const ok = window.confirm(
+    "要讓這台電腦上的 Claude 連進這個 Slate 嗎？\n\nClaude 將可以讀取和修改這裡的筆記與任務；刪除前仍會先問你。\n只有在你剛從自己的 Claude 點了連結時才按確定。",
+  );
+  if (ok) {
+    try {
+      localStorage.setItem(CODE_KEY, m[1]);
+      localStorage.setItem(KEY, "1");
+    } catch {
+      /* storage unavailable */
+    }
+    setTimeout(() => toast("已連接 Claude。現在可以回到 Claude 繼續。"), 800);
+  }
+  return true;
+}
+
 export function setBridgeEnabled(on: boolean) {
   try {
     if (on) localStorage.setItem(KEY, "1");

@@ -20,6 +20,7 @@
 //
 // Options (environment variables):
 //   SLATE_MCP_PORT   port on 127.0.0.1 (default 47800; Slate must be told the same)
+//   SLATE_URL        where Slate is opened to connect (default https://slate.16888u.com/)
 //   SLATE_ORIGINS    extra web addresses allowed to act as Slate, comma-separated, for a
 //                    copy you host yourself or run locally (default: only https://slate.16888u.com)
 import http from "node:http";
@@ -445,9 +446,14 @@ const fresh = (t) => Math.abs(Date.now() - Number(t)) < 120_000;
 // copy of this program on this computer and never has to be stored anywhere else.
 const KEY = hmac(SECRET, "pairing-code").slice(0, 16).toUpperCase();
 const CODE = KEY.replace(/(.{4})(?=.)/g, "$1-");
+// Opening this in the browser pairs that Slate with this computer's bridge (after the person says yes).
+// The code sits after the "#", which browsers never send to any server.
+const SLATE_URL = (process.env.SLATE_URL || "https://slate.16888u.com/").replace(/#.*$/, "");
+const LINK = SLATE_URL + "#/pair/" + CODE;
+const CONNECT = `To connect, the person opens this link in the browser where they use Slate, and confirms there: ${LINK}`;
 
 if (process.argv[2] === "pair") {
-  console.log("Slate pairing code for this computer:\n\n    " + CODE + "\n\nPaste it in Slate: AI 助理 → 模型設定 → Claude 訂閱 → 配對碼.");
+  console.log("Open this link in the browser where you use Slate:\n\n    " + LINK + "\n\nOr paste this pairing code in Slate (AI 助理 → 模型設定 → Claude 訂閱 → 進階):\n\n    " + CODE);
   process.exit(0);
 }
 
@@ -503,8 +509,9 @@ function callTab(name, input) {
       resolve(result);
     };
     const noTab =
-      "Slate is not connected. Ask the person to open Slate in their browser on this computer (https://slate.16888u.com), go to AI 助理 → 模型設定 → Claude 訂閱, " +
-      `paste this pairing code there: ${CODE} , and switch on 「允許這台電腦上的 Claude 連進來」. Then try again.`;
+      "Slate is not connected yet. Show the person this link as a clickable link and ask them to open it (in the browser where they use Slate) and press OK there; then try again. " +
+      "If they already connected before, Slate just needs to be open in that browser. Link: " +
+      LINK;
     waiting.set(id, {
       resolve: finish,
       timer: setTimeout(() => finish({ text: "Slate did not answer in time (a confirmation may still be waiting for the person).", error: true }), CALL_TIMEOUT),
@@ -642,16 +649,16 @@ async function handle(msg) {
         tools: [
           ...TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.schema, ...(t.danger ? { annotations: { destructiveHint: true } } : {}) })),
           {
-            name: "slate_pairing_code",
-            description: "Show the pairing code the person pastes into Slate (AI 助理 → 模型設定 → Claude 訂閱) to connect Slate to this computer's Claude. Use it when they ask for the code or when a Slate tool says it is not connected.",
+            name: "slate_connect",
+            description: "Get the link that connects the person's Slate (in their browser) to Claude on this computer. Use it when they ask to connect, set up or pair Slate, or when a Slate tool says it is not connected. Show them the link as a clickable link.",
             inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false },
           },
         ],
       });
     case "tools/call": {
       const name = String(params?.name ?? "");
-      if (name === "slate_pairing_code") {
-        return reply({ content: [{ type: "text", text: `Pairing code: ${CODE}\nPaste it in Slate: AI 助理 → 模型設定 → Claude 訂閱 → 配對碼, then switch on 「允許這台電腦上的 Claude 連進來」.` }], isError: false });
+      if (name === "slate_connect") {
+        return reply({ content: [{ type: "text", text: `${CONNECT}\nAfter that, Slate has to stay open in that browser while you work in it. (Manual pairing code, only if the link cannot be used: ${CODE})` }], isError: false });
       }
       if (!TOOLS.some((t) => t.name === name)) return fail(-32602, `Unknown tool: ${name}`);
       const result = await run(name, params?.arguments ?? {});

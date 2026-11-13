@@ -1,7 +1,7 @@
 // The assistant panel: talk to a model that works in this workspace through the Slate tools.
 // Which model is the person's choice: a Claude API key, or a model on their own computer.
 import { useEffect, useRef, useState } from "react";
-import { Check, CircleSlash, LoaderCircle, Plus, Send, Settings, Square, TriangleAlert, X } from "lucide-react";
+import { Check, CircleSlash, Download, LoaderCircle, Plus, Send, Settings, Square, TriangleAlert, X } from "lucide-react";
 import {
   AiError,
   type AiSettings,
@@ -34,78 +34,109 @@ async function connect(settings: AiSettings): Promise<Assistant> {
     : (await import("../lib/ai/local")).createLocal(settings, tools);
 }
 
-/** Using a Claude plan instead of a key: Claude Desktop / Claude Code reach this tab through a small bridge program. */
+/**
+ * Using a Claude plan instead of a key. Two steps and no typing: install the extension in
+ * Claude Desktop (a file to double-click), then follow the link Claude hands over, which
+ * pairs this browser with it. The manual route stays available under "advanced".
+ */
 function SubscriptionSetup() {
   const state = useBridge();
   const [on, setOn] = useState(bridgeEnabled);
   const [code, setCode] = useState(bridgeCode);
+  const connected = state === "connected";
   return (
     <div className="ai-mcp">
       <p className="muted small">
-        不用 API 金鑰：讓你電腦上的 <b>Claude 桌面版</b>或 <b>Claude Code</b> 連進這個 Slate，用的是它們本來的方案（Pro／Max 等）。 對話在 Claude
-        那邊進行，Slate 這個分頁要開著。只能在電腦上使用。
+        不用 API 金鑰：讓這台電腦上的 <b>Claude 桌面版</b>直接在你的 Slate 裡做事，用的是你原本的方案（Pro／Max 等）。對話在 Claude 那邊進行，Slate
+        要開著。只能在電腦上使用。
       </p>
-      <ol>
-        <li>
-          下載橋接程式{" "}
+
+      {connected ? (
+        <p className="ai-bridge-state connected" role="status">
+          已經連上 Claude 了。在 Claude 裡直接說想做的事，例如「看看我 Slate 今天的任務」。
+        </p>
+      ) : (
+        <ol className="ai-steps">
+          <li>
+            <b>安裝到 Claude</b>
+            <a className="btn primary" href="slate.mcpb" download>
+              <Download size={15} /> 下載 Claude 擴充功能
+            </a>
+            <span className="muted small">下載後點兩下那個檔案，Claude 桌面版會問你要不要安裝，按「安裝」。</span>
+          </li>
+          <li>
+            <b>連接</b>
+            <span>
+              在 Claude 裡說：<q>連接我的 Slate</q>，然後點它給你的連結。
+            </span>
+            <span className="muted small">連結會打開 Slate 並問你一次是否允許。請用你平常開 Slate 的這個瀏覽器打開它。</span>
+          </li>
+        </ol>
+      )}
+
+      {on && !connected && (
+        <p className={"ai-bridge-state " + state} role="status">
+          {state === "unpaired"
+            ? validCode(code)
+              ? "配對不符：請在 Claude 裡再說一次「連接我的 Slate」，點新的連結。"
+              : "還沒配對：請在 Claude 裡說「連接我的 Slate」，點它給的連結。"
+            : "正在等 Claude：請確認 Claude 桌面版開著，而且擴充功能已經安裝。瀏覽器問是否允許連線到這台裝置時，請按允許。"}
+        </p>
+      )}
+
+      {(on || connected) && (
+        <button
+          type="button"
+          className="btn"
+          onClick={() => {
+            setOn(false);
+            setBridgeEnabled(false);
+          }}
+        >
+          中斷與 Claude 的連接
+        </button>
+      )}
+
+      <details className="ai-advanced">
+        <summary>進階：Claude Code 或手動設定</summary>
+        <p className="muted small">
+          Claude Code 或其他支援 MCP 的程式：下載{" "}
           <a href="slate-mcp.mjs" download>
             slate-mcp.mjs
           </a>
-          （單一檔案，電腦要裝有 Node.js 18 以上）。
-        </li>
-        <li>
-          告訴 Claude 它在哪裡。Claude Code 執行：
-          <code>claude mcp add slate -- node 下載的路徑/slate-mcp.mjs</code>
-          Claude 桌面版：設定 → 開發人員 → 編輯設定，在 <code className="inline">mcpServers</code> 裡加入：
-          <code>{'"slate": { "command": "node", "args": ["下載的路徑/slate-mcp.mjs"] }'}</code>
-          然後重新啟動 Claude。
-        </li>
-        <li>
-          取得這台電腦的配對碼：在 Claude 裡說「給我 Slate 配對碼」，或在終端機執行
-          <code>node 下載的路徑/slate-mcp.mjs pair</code>
-          把它貼在下面。配對碼讓 Slate 只聽你自己的橋接程式。
-        </li>
-        <li>打開下面的開關。瀏覽器問是否允許這個網站連線到這台裝置上的應用程式時，請按允許。</li>
-      </ol>
-      <label>
-        配對碼
-        <input
-          className="input ai-code"
-          autoComplete="off"
-          spellCheck={false}
-          placeholder="XXXX-XXXX-XXXX-XXXX"
-          value={code}
-          onChange={(e) => {
-            setCode(e.target.value);
-            if (validCode(e.target.value) || !e.target.value.trim()) setBridgeCode(e.target.value);
-          }}
-        />
-      </label>
-      <label className="ai-switch">
-        <input
-          type="checkbox"
-          checked={on}
-          onChange={(e) => {
-            setOn(e.target.checked);
-            setBridgeEnabled(e.target.checked);
-          }}
-        />
-        允許這台電腦上的 Claude 連進來
-      </label>
-      {on && (
-        <p className={"ai-bridge-state " + state} role="status">
-          {state === "connected"
-            ? "已連上橋接程式。現在可以在 Claude 裡說「看看我 Slate 今天的任務」。"
-            : state === "unpaired"
-              ? validCode(code)
-                ? "配對碼不符：那個連接埠上的程式不是用這組配對碼的橋接程式，Slate 不會聽它的。請重新取得配對碼。"
-                : "請先貼上配對碼（16 個字元）。"
-              : "還沒找到橋接程式。請確認 Claude 已經啟動而且設定好了；它啟動後這裡會自動連上。"}
+          （需要 Node.js 18 以上），然後執行：
         </p>
-      )}
+        <code>claude mcp add slate -- node 下載的路徑/slate-mcp.mjs</code>
+        <label>
+          配對碼（執行 <code className="inline">node slate-mcp.mjs pair</code> 取得）
+          <input
+            className="input ai-code"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="XXXX-XXXX-XXXX-XXXX"
+            value={code}
+            onChange={(e) => {
+              setCode(e.target.value);
+              if (validCode(e.target.value) || !e.target.value.trim()) setBridgeCode(e.target.value);
+            }}
+          />
+        </label>
+        <label className="ai-switch">
+          <input
+            type="checkbox"
+            checked={on}
+            onChange={(e) => {
+              setOn(e.target.checked);
+              setBridgeEnabled(e.target.checked);
+            }}
+          />
+          允許這台電腦上的 Claude 連進來
+        </label>
+      </details>
+
       <p className="muted small">
-        橋接程式不儲存任何資料，只接受這個網站、而且知道配對碼的分頁；Slate 也只執行有配對碼簽章的指令。Claude 要刪除東西時，這個分頁會先跳出視窗問你。
-        Claude 讀到的頁面內容會送給 Anthropic 處理。
+        擴充功能不儲存任何資料，只和這個網站上配對過的 Slate 溝通；Slate 也只執行有配對簽章的指令。Claude 要刪除東西時，Slate 會先跳出視窗問你。 Claude
+        讀到的頁面內容會送給 Anthropic 處理。
       </p>
     </div>
   );

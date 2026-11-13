@@ -145,6 +145,7 @@ const isPhone = () => isApple() || /Android/.test(navigator.userAgent);
  */
 export function wantsLanding(): boolean {
   if (standalone()) return false;
+  if (location.hash.startsWith("#/pair/")) return false; // on the way to connect Claude, not to install
   if (new URLSearchParams(location.search).has("get")) return true;
   try {
     if (localStorage.getItem("landing-done") === "1") return false;

@@ -251,6 +251,15 @@ td:hover .cell-input[type="date"]::-webkit-calendar-picker-indicator,
 .ai-mcp code.inline { display: inline; margin: 0; padding: 1px 4px; user-select: auto; }
 .ai-switch { display: flex !important; flex-direction: row !important; align-items: center; gap: 8px; font-size: 14px !important; color: var(--text) !important; font-weight: 600; }
 .ai-switch input { width: 18px; height: 18px; accent-color: var(--accent); }
+.ai-steps { list-style: none; padding: 0 !important; counter-reset: step; gap: 14px !important; }
+.ai-steps li { counter-increment: step; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding-left: 34px; position: relative; }
+.ai-steps li::before { content: counter(step); position: absolute; left: 0; top: -1px; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-text); font-size: 13px; font-weight: 700; }
+.ai-steps q { font-weight: 600; quotes: "「" "」"; }
+.ai-mcp a.btn { color: var(--accent-text); height: 38px; }
+.ai-advanced { border-top: 1px solid var(--line); padding-top: 8px; }
+.ai-advanced summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.ai-advanced[open] { display: flex; flex-direction: column; gap: 10px; }
+.ai-advanced label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
 .ai-bridge-state { padding: 8px 10px; border-radius: 8px; background: var(--hover); }
 .ai-bridge-state.unpaired { color: var(--danger); }
 .ai-code { font: 600 15px/1 ui-monospace, Consolas, monospace; letter-spacing: 0.06em; text-transform: uppercase; }

@@ -14,8 +14,9 @@ const shots = process.argv[3];
 const PORT = 47811;
 const origin = new URL(base).origin;
 // its own secret, so the test never touches the pairing of the person's real bridge
-const env = { ...process.env, SLATE_MCP_PORT: String(PORT), SLATE_ORIGINS: origin, SLATE_MCP_SECRET_FILE: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "slate-mcp-")), "secret") };
+const env = { ...process.env, SLATE_MCP_PORT: String(PORT), SLATE_ORIGINS: origin, SLATE_URL: base, SLATE_MCP_SECRET_FILE: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "slate-mcp-")), "secret") };
 const CODE = /([0-9A-F]{4}-){3}[0-9A-F]{4}/.exec(spawnSync(process.execPath, ["public/slate-mcp.mjs", "pair"], { env, encoding: "utf8" }).stdout)[0];
+const LINK = base + "#/pair/" + CODE;
 
 /** Start a copy of the bridge and talk JSON-RPC to it over its stdin/stdout. */
 function client() {
@@ -101,7 +102,8 @@ await step("the bridge introduces itself and lists the same tools the app has", 
   assert.match(init.result.instructions, /Slate workspace/);
   const { tools } = (await claude.request("tools/list")).result;
   assert.ok(tools.length >= 13);
-  assert.match((await claude.tool("slate_pairing_code")).text, new RegExp("Pairing code: " + CODE));
+  // asking to connect gets a link to click, not a command to run
+  assert.ok((await claude.tool("slate_connect")).text.includes(LINK));
   assert.deepEqual(tools.filter((t) => t.annotations?.destructiveHint).map((t) => t.name).sort(), ["delete_task", "trash_page"]);
   assert.ok(tools.every((t) => t.inputSchema.type === "object" && t.description.length > 30));
   assert.deepEqual((await claude.request("ping")).result, {});
@@ -110,25 +112,50 @@ await step("the bridge introduces itself and lists the same tools the app has", 
 await step("while Slate has not allowed it, a call explains what the person must switch on", async () => {
   const r = await claude.tool("list_tasks");
   assert.equal(r.isError, true);
-  assert.match(r.text, /Slate is not connected.*允許這台電腦上的 Claude 連進來/s);
-  assert.ok(r.text.includes(CODE)); // and hands over the code to paste
+  assert.match(r.text, /Slate is not connected yet/);
+  assert.ok(r.text.includes(LINK)); // and hands over the link that fixes it
 });
 
-await step("the person switches it on in Slate, and the tab finds the bridge", async () => {
+await step("the settings offer one download to double-click, and no commands", async () => {
   await page.locator(".sidebar .nav-row", { hasText: "AI 助理" }).click();
   await page.locator(".ai-setup .seg-btn", { hasText: "Claude 訂閱" }).click();
-  assert.equal(await page.locator(".ai-setup .btn.primary").isVisible(), false); // nothing to "save" on this tab
-  const href = await page.locator(".ai-mcp a[download]").getAttribute("href");
-  const file = await fetch(new URL(href, base)).then((r) => r.text());
-  assert.match(file, /^#!\/usr\/bin\/env node/); // the download is the bridge itself
-  await page.locator(".ai-switch input").check();
-  // switched on, but not paired: the tab asks nothing of the bridge, and the bridge gives it nothing
-  await page.waitForSelector(".ai-bridge-state.unpaired >> text=請先貼上配對碼");
-  await page.fill(".ai-code", "0000-0000-0000-0000");
-  await page.waitForSelector(".ai-bridge-state.unpaired >> text=配對碼不符");
-  assert.match((await claude.tool("list_tasks")).text, /Slate is not connected/);
-  await page.fill(".ai-code", CODE.toLowerCase()); // typed sloppily
+  assert.equal(await page.locator(".ai-setup .btn.primary >> text=儲存").isVisible(), false); // nothing to "save" on this tab
+  const href = await page.locator(".ai-steps a.btn[download]").getAttribute("href");
+  assert.equal(href, "slate.mcpb");
+  const file = Buffer.from(await (await fetch(new URL(href, base))).arrayBuffer());
+  assert.equal(file.subarray(0, 2).toString(), "PK"); // a real archive, not the app's page
+  assert.ok(file.includes(Buffer.from("manifest.json")));
+  // the command line is there for those who want it, but folded away
+  assert.equal(await page.locator(".ai-advanced").getAttribute("open"), null);
+  assert.equal(await page.locator(".ai-advanced code").first().isVisible(), false);
+  if (shots) await page.screenshot({ path: shots + "/mcp-00-setup.png" });
+});
+
+await step("a link the person refuses connects nothing", async () => {
+  const other = await ctx.newPage();
+  other.once("dialog", (d) => void d.dismiss());
+  await other.goto(LINK);
+  await other.waitForSelector(".page-title, .home");
+  assert.equal(await other.evaluate(() => localStorage.getItem("ai-bridge")), null);
+  assert.ok(!(await other.evaluate(() => location.hash)).includes("pair")); // the code does not linger in the address
+  await other.close();
+  assert.match((await claude.tool("list_tasks")).text, /Slate is not connected yet/);
+});
+
+await step("opening the link Claude gave, and saying yes, is all it takes to connect", async () => {
+  let asked = "";
+  page.once("dialog", (d) => {
+    asked = d.message();
+    void d.accept();
+  });
+  await page.goto(LINK); // this tab already shows Slate: the link takes effect without a reload
+  await page.waitForSelector(".page-title, .home");
+  assert.match(asked, /要讓這台電腦上的 Claude 連進這個 Slate 嗎/);
+  await page.waitForSelector(".toast >> text=已連接 Claude");
+  // no code typed, no switch found: the settings simply show it as connected
+  await page.locator(".ai-setup .seg-btn", { hasText: "Claude 訂閱" }).click();
   await page.waitForSelector(".ai-bridge-state.connected");
+  assert.equal(await page.locator(".ai-steps").count(), 0);
   if (shots) await page.screenshot({ path: shots + "/mcp-01-connected.png" });
 });
 
@@ -243,8 +270,8 @@ await step("a program squatting on the port cannot make Slate do anything", asyn
 });
 
 await step("switching it off stops the tab from listening", async () => {
-  await page.locator(".ai-switch input").uncheck();
-  await page.waitForSelector(".ai-bridge-state", { state: "detached" });
+  await page.locator(".ai-mcp .btn", { hasText: "中斷與 Claude 的連接" }).click();
+  await page.waitForSelector(".ai-steps"); // back to the two steps
   await page.waitForTimeout(500);
   const r = await claude.tool("list_tasks");
   assert.equal(r.isError, true);
