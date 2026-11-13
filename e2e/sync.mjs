@@ -238,6 +238,47 @@ await step("the meeting point only ever sees derived ids, never the shared secre
   assert.match(me.id, /^[0-9a-f]{24}$/);
 });
 
+await step("a third device linked through the laptop is accepted by the phone too", async () => {
+  const tablet = await device("tablet");
+  await tablet.goto(base);
+  await tablet.waitForSelector(".page-title");
+  await openSettings(laptop, false);
+  await laptop.locator(".link .btn.primary", { hasText: "顯示連結碼" }).click();
+  await laptop.waitForSelector(".link-code");
+  const second = (await laptop.locator(".link-code").innerText()).trim();
+  await openSettings(tablet, false);
+  await tablet.locator(".link .btn", { hasText: "輸入連結碼" }).click();
+  await tablet.fill(".link-input", second);
+  await tablet.locator(".link .btn.primary").click();
+  // it ends up connected to both, although only the laptop ever saw the code
+  await until("tablet connected to both", async () => (await tablet.locator(".link-devices .link-dot.on").count()) === 2, 200);
+  await tablet.keyboard.press("Escape");
+  await laptop.keyboard.press("Escape");
+  await tablet.evaluate(() => (location.hash = "/tasks/inbox"));
+  await tablet.fill(".quick-add input", "平板加的");
+  await tablet.keyboard.press("Enter");
+  await phone.waitForSelector(".task-row >> text=平板加的");
+  await laptop.waitForSelector(".task-row >> text=平板加的");
+
+  // the laptop removes it: the phone moves to the new secret, the tablet is left outside
+  await openSettings(laptop, false);
+  laptop.once("dialog", (d) => d.accept());
+  await laptop.locator(".link-devices li", { hasText: "Windows 電腦" }).locator(".link-remove").click();
+  await until("laptop back to one connected device", async () =>
+    (await laptop.locator(".link-devices li").count()) === 1 && (await laptop.locator(".link-devices .link-dot.on").count()) === 1,
+  );
+  await laptop.keyboard.press("Escape");
+  await laptop.fill(".quick-add input", "移除平板後加的");
+  await laptop.keyboard.press("Enter");
+  await phone.waitForSelector(".task-row >> text=移除平板後加的", { timeout: 30_000 });
+  await tablet.fill(".quick-add input", "被移除的平板加的");
+  await tablet.keyboard.press("Enter");
+  await tablet.waitForTimeout(3000);
+  assert.ok(!(await store(tablet, "tasks")).some((t) => t.title === "移除平板後加的"), "removed device still receives");
+  assert.ok(!(await store(phone, "tasks")).some((t) => t.title === "被移除的平板加的"), "removed device still sends");
+  await tablet.context().close();
+});
+
 await step("stopping sync on the phone keeps its data and ends the exchange", async () => {
   await openSettings(phone, true);
   phone.once("dialog", (d) => d.accept());

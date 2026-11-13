@@ -17,6 +17,12 @@
 //   { t: "changes", changes }                  records the other side lacks or has older
 //   { t: "file", change, i, n, data }          one attachment, base64 in n pieces
 //   { t: "bye", device }                       this device stopped syncing: forget it
+//   { t: "members", members }                  a device was just linked: here is the list
+//   { t: "rekey", secret, members }            a device was removed: the group moved to a new
+//                                              secret, which the removed device never gets
+//
+// Who may connect: only a device whose id is in the local member list. Ids get there by
+// pairing with a code, or by being named by a device that is already a member.
 import { liveQuery } from "dexie";
 import { useSyncExternalStore } from "react";
 import type { DataConnection, Peer, PeerOptions } from "peerjs";
@@ -38,6 +44,8 @@ type Msg =
   | { t: "changes"; changes: SyncChange[] }
   | { t: "file"; change: SyncChange; i: number; n: number; data: string }
   | { t: "bye"; device: string }
+  | { t: "members"; members: Device[] }
+  | { t: "rekey"; secret: string; members: Device[] }
   | { t: "join"; device: Device }
   | { t: "welcome"; secret: string; members: Device[] }
   | { t: "joined" };
@@ -316,6 +324,15 @@ async function onMessage(from: string, msg: Msg) {
       await saveGroup({ ...group, members: group.members.filter((m) => m.id !== from) });
       conns.get(from)?.conn.close();
     }
+  } else if (msg.t === "members") {
+    await mergeMembers(Array.isArray(msg.members) ? msg.members : []);
+    void dialMissing(generation);
+  } else if (msg.t === "rekey") {
+    if (!group || typeof msg.secret !== "string" || !/^[0-9a-f]{64}$/.test(msg.secret) || !Array.isArray(msg.members)) return;
+    const members = msg.members.filter(isDevice).map(tidy).filter((m) => m.id !== me.id);
+    if (!members.some((m) => m.id === from)) return;
+    await saveGroup({ secret: msg.secret, members });
+    setTimeout(() => void connect(), 0); // everyone meets again under the new secret
   }
 }
 
@@ -364,6 +381,8 @@ function adopt(conn: DataConnection, outgoing: boolean, run: number) {
       }
       if (!isDevice(msg.device) || msg.device.id === me.id) return void conn.close();
       const id = msg.device.id;
+      // holding the key is not enough: the device must also be one we were told about
+      if (!group.members.some((m) => m.id === id)) return void conn.close();
       const dialer = outgoing ? me.id : id;
       const existing = conns.get(id);
       if (existing && existing.conn !== conn) {
@@ -563,8 +582,11 @@ export async function beginPairing(): Promise<string> {
       await saveGroup({ secret: g.secret, members: [...others, joiner] });
       await sleep(1500); // let the answer arrive before the pairing channel goes away
       cancelPairing();
-      if (wasLinked) void dialMissing(generation);
-      else void connect();
+      if (wasLinked) {
+        // tell the devices already linked, so they accept the new one
+        void queue(() => post("*", { t: "members", members: [...others, joiner] }));
+        void dialMissing(generation);
+      } else void connect();
     });
   });
   emit();
@@ -620,6 +642,35 @@ export async function joinWithCode(input: string): Promise<boolean> {
   } finally {
     setTimeout(() => p.destroy(), 500);
   }
+}
+
+/**
+ * Cut one device off (lost phone, sold laptop). The group moves to a new secret that the
+ * removed device never receives, so it can no longer connect or pose as another device.
+ * Only devices connected right now get the new secret; resolves to how many of the
+ * remaining devices were missed and must be linked again with a code.
+ */
+export async function removeDevice(id: string): Promise<number> {
+  if (!group) return 0;
+  const remaining = group.members.filter((m) => m.id !== id);
+  const secret = randomHex(32);
+  const reached: Device[] = [];
+  await queue(async () => {
+    // only those connected right now can be told; the rest are left on the old secret
+    const online = remaining.filter((m) => conns.has(m.id));
+    for (const m of online) {
+      if (await post(m.id, { t: "rekey", secret, members: [me, ...online.filter((r) => r.id !== m.id)] })) reached.push(m);
+    }
+  });
+  await sleep(500); // let the new secret leave before the old connections are closed
+  if (reached.length === 0) {
+    disconnect();
+    await saveGroup(null);
+  } else {
+    await saveGroup({ secret, members: reached });
+    await connect();
+  }
+  return remaining.length - reached.length;
 }
 
 /** Stop syncing on this device. Its data stays; the other devices forget it. */

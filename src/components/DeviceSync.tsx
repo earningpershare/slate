@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "../db";
-import { beginPairing, cancelPairing, joinWithCode, LinkError, unlink, useLink } from "../lib/link";
+import { beginPairing, cancelPairing, joinWithCode, LinkError, removeDevice, unlink, useLink } from "../lib/link";
 
 const explain = (e: unknown) => (e instanceof LinkError ? e.message : "發生錯誤，請再試一次。");
 
@@ -58,6 +58,25 @@ export function SyncSection({ onMessage }: { onMessage: (m: string) => void }) {
                 <span className={"link-dot" + (d.online ? " on" : "")} />
                 <span>{d.name}</span>
                 <span className="muted small">{d.online ? "連線中，變更會立刻同步" : "目前沒有開著"}</span>
+                <button
+                  className="btn ghost small link-remove"
+                  title="這台裝置遺失或不再使用時，把它排除在同步之外"
+                  onClick={async () => {
+                    const others = link.devices.filter((o) => o.id !== d.id);
+                    const offline = others.filter((o) => !o.online).length;
+                    if (
+                      !confirm(
+                        `把「${d.name}」排除在同步之外？它之後無法再連上你的其他裝置（它上面已有的資料不會被刪除）。` +
+                          (offline ? `\n\n另有 ${offline} 台裝置目前沒有開著，移除後需要重新用連結碼連結。` : ""),
+                      )
+                    )
+                      return;
+                    await removeDevice(d.id);
+                    onMessage(`已移除「${d.name}」。`);
+                  }}
+                >
+                  移除
+                </button>
               </li>
             ))}
             {link.devices.length === 0 && <li className="muted">沒有其他裝置了。</li>}
