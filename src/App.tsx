@@ -15,7 +15,7 @@ import {
 } from "./lib/autobackup";
 import { rememberSeed } from "./lib/link";
 import { SyncSection } from "./components/DeviceSync";
-import { InstallBar, InstallSection } from "./components/Install";
+import { InstallBar, InstallSection, Landing, wantsLanding } from "./components/Install";
 import { Modal, NARROW, navigate, openPage, useLocalState, useMedia, useRoute } from "./ui";
 import Home from "./components/Home";
 import PageView from "./components/PageView";
@@ -62,6 +62,8 @@ export default function App() {
   const [settings, setSettings] = useState(false);
   const [ready, setReady] = useState(false);
   const dark = useDark(theme);
+  // phone visitors who have not installed Slate see the download page first
+  const [landing, setLanding] = useState(wantsLanding);
 
   useEffect(() => {
     starting ??= (async () => {
@@ -180,6 +182,7 @@ export default function App() {
     })();
   }, [ready, route.length]);
 
+  if (landing) return <Landing onContinue={() => setLanding(false)} />;
   if (!ready) return null;
 
   const [section, arg] = route;

@@ -44,6 +44,7 @@ const device = async (name, opts = {}) => {
   await ctx.addInitScript((b) => {
     localStorage.setItem("slate:broker", b);
     localStorage.setItem("slate:debug", "1");
+    localStorage.setItem("landing-done", "1"); // straight to the app, not the download page
   }, "localhost:" + BROKER);
   return watchPage(name, await ctx.newPage());
 };

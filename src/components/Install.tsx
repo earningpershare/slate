@@ -132,3 +132,132 @@ export function InstallSection() {
     </div>
   );
 }
+
+// ---------- the download page ----------
+
+const isPhone = () => isApple() || /Android/.test(navigator.userAgent);
+
+/**
+ * Whether a visitor should land on the download page instead of the app: someone on a phone
+ * who has not installed Slate and has not chosen to use it in the browser. "?get" in the
+ * address shows the page on any device.
+ */
+export function wantsLanding(): boolean {
+  if (standalone()) return false;
+  if (new URLSearchParams(location.search).has("get")) return true;
+  try {
+    if (localStorage.getItem("landing-done") === "1") return false;
+  } catch {
+    return false;
+  }
+  return isPhone();
+}
+
+/** true once the service worker can hand out the profile with the type iOS expects */
+function useProfileReady(): boolean {
+  const [ready, setReady] = useState(() => !("serviceWorker" in navigator) || !!navigator.serviceWorker.controller);
+  useEffect(() => {
+    if (ready) return;
+    const on = () => setReady(true);
+    navigator.serviceWorker.addEventListener("controllerchange", on);
+    const t = setTimeout(on, 12_000); // never leave the button dead
+    return () => {
+      navigator.serviceWorker.removeEventListener("controllerchange", on);
+      clearTimeout(t);
+    };
+  }, [ready]);
+  return ready;
+}
+
+export function Landing({ onContinue }: { onContinue: () => void }) {
+  const way = useInstallWay();
+  const ready = useProfileReady();
+  const [started, setStarted] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const address = location.origin + location.pathname;
+  const useInBrowser = () => {
+    try {
+      localStorage.setItem("landing-done", "1");
+    } catch {
+      /* ignore */
+    }
+    if (location.search) history.replaceState(null, "", location.pathname + location.hash);
+    onContinue();
+  };
+
+  return (
+    <div className="landing">
+      <div className="landing-card">
+        <img className="landing-icon" src="icon-192.png" alt="" width={96} height={96} />
+        <h1>Slate</h1>
+        <p className="landing-tag">離線的筆記、資料庫與待辦。不用註冊，資料只在你的裝置上。</p>
+
+        {way === "profile" && (
+          <>
+            {ready ? (
+              <a className="btn primary landing-main" href={PROFILE} onClick={() => setStarted(true)}>
+                <Download size={18} /> 下載安裝（iPhone／iPad）
+              </a>
+            ) : (
+              <button className="btn primary landing-main" disabled>
+                準備中…
+              </button>
+            )}
+            <ol className={"landing-steps" + (started ? " on" : "")}>
+              <li>在跳出的視窗按「允許」，再按「關閉」。</li>
+              <li>打開「設定」App，點最上方的「已下載描述檔」。</li>
+              <li>按右上角「安裝」，輸入手機密碼，再按兩次「安裝」。</li>
+              <li>回到主畫面，點 Slate 圖示就能開始用，之後不連網也能開。</li>
+            </ol>
+            <p className="landing-note">描述檔只會在主畫面加一個圖示。因為沒有付費簽署，安裝畫面會顯示「未簽署」。</p>
+          </>
+        )}
+
+        {way === "open-safari" && (
+          <>
+            <p className="landing-warn">這個瀏覽器不能安裝。請複製網址，改用 Safari 開啟。</p>
+            <button
+              className="btn primary landing-main"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(address);
+                  setCopied(true);
+                } catch {
+                  prompt("請複製這個網址，貼到 Safari：", address);
+                }
+              }}
+            >
+              {copied ? "已複製，請到 Safari 貼上" : "複製網址"}
+            </button>
+          </>
+        )}
+
+        {way === "prompt" && (
+          <button
+            className="btn primary landing-main"
+            onClick={async () => {
+              const o = offer;
+              if (!o) return;
+              await o.prompt();
+              if ((await o.userChoice).outcome === "accepted") useInBrowser();
+            }}
+          >
+            <Download size={18} /> 下載安裝
+          </button>
+        )}
+
+        {way === null && (
+          <p className="landing-note">
+            {/Android/.test(navigator.userAgent)
+              ? "請用 Chrome 開啟，按右上角選單 →「安裝應用程式」（或「加到主畫面」）。"
+              : "在 Chrome 或 Edge 的網址列右邊按「安裝」圖示；iPhone 請用 Safari 開啟這個網址。"}
+          </p>
+        )}
+
+        <button className="btn ghost landing-skip" onClick={useInBrowser}>
+          不安裝，直接在瀏覽器裡用
+        </button>
+      </div>
+    </div>
+  );
+}
