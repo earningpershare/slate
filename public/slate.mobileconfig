@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>FullScreen</key>
+			<true/>
+			<key>IgnoreManifestScope</key>
+			<false/>
+			<key>IsRemovable</key>
+			<true/>
+			<key>Label</key>
+			<string>Slate</string>
+			<key>Precomposed</key>
+			<true/>
+			<key>URL</key>
+			<string>https://earningpershare.github.io/slate/</string>
+			<key>Icon</key>
+			<data>
+				iVBORw0KGgoAAAANSUhEUgAAALQAAAC0CAIAAACyr5FlAAAD80lEQVR4nOzdP2hdZRjH
+				8afaRcGlKEgFp4DtlCUEh4qbFIegq0KnDh0KHZy6ZOgkiJtDwKzp2tBBoosUnUpwcdBC
+				JsEs1SwFs/pyrxQh/bWUlpvzXD6fIXNu+Obc97x/zjm7euNKwZO8UhCIg0gcROIgEgeR
+				OIjEQSQOInEQiYNIHETiIBIHkTiIxEEkDiJxEImDSBxE4iASB5E4iMRBJA4icRCJg0gc
+				ROIgEgeROIjEQSQOInEQiYNIHETiIBIHkTiIxEEkDiJxEImDSBxE4iASB5E4iMRBJA4i
+				cRCJg0gcROIgEgeROIjEQSQOInEQiYNIHERnq6Hz595cW7k4flYHh0d/HR493D/4vbpp
+				FscIYmP9g2uXP6lutvZ2t/buVCtnVm9cqT6+2/y6ywXjpHEJ+fjWF9VHpzHHrc+u9i2j
+				Zpe98RGqj05xjC+Uam58hEZ9t4ljCcqYE8fL1/oL5f/On3urmmgTx/7Bb8VitbmVHUP9
+				WgqNKm9z5RhxbN7erubGR2hU+atvv79aTTz4848xMbO2cqF6GpOkX93ZqT46xVGzv2/H
+				PsbVYufeD5u3v61Wms2QPjZuXrrcv3RcVZlrufBW/61mLckQdbIs2ROJg0gcROIgEgeR
+				OIjEQSQOInEQiYOo3/T5/HTCWHs7rbWV+TmUrb3dpZ+/bxbHaGL7+s06VbMoL6ytXLx7
+				/+d2R1GeS6cl+ymU8dgbr70+2zlwpu+i6zN1GnNcu/xpTczG+qWl2fl8Ups4xr/pBPf4
+				zAdAtaTajDkmu6O/77bFZ2q0+/xhTdJkf7EX52jCi9o/eFBLqtOAdJr3BUt82qrXuZXJ
+				7d7udQ7leXWa53h0/M/h0d/vvfPumGOoCRiTpDv3vq/l1e9owqlPnw9jbnR8myzx9Ndc
+				13MrLIBVWSJxEImDSBxE4iASB5E4iMRBJA4icRB1fbJPo8c+9X0IUb84xqpbr8fL16yP
+				jucYmj1NcPv6zc8//Ki6mZ9jmB91qT6avTWh9W7e8ctP8HTFUzR730o1t7F+qfrwSo2F
+				mr2drs3Fz63soo2RRzXh3MqiNbqtdW5l0bxS4+UbcWzt7VZzd+//1KjyTmOOXn/Zk9q9
+				MqbZuZUff/3l0fFxx9mOUfbVb76sVloeTWj3uvIxzuh4zXNuhcg8B5E4iMRBJA4icRCJ
+				g0gcROIgEgeROIjEQSQOInEQiYNIHETiIBIHkTiIxEEkDiJxEImDSBxE4iASB5E4iMRB
+				JA4icRCJg0gcROIgEgeROIjEQSQOInEQiYNIHETiIBIHkTiIxEEkDiJxEImDSBxE4iAS
+				B5E4iMRBJA4icRCJg0gcROIgEgeROIjEQfQvAAAA//8HBM0SAAAABklEQVQDAFUf6PKY
+				35pnAAAAAElFTkSuQmCC
+			</data>
+			<key>PayloadDisplayName</key>
+			<string>Slate</string>
+			<key>PayloadDescription</key>
+			<string>在主畫面加入 Slate。</string>
+			<key>PayloadIdentifier</key>
+			<string>io.github.earningpershare.slate.webclip</string>
+			<key>PayloadType</key>
+			<string>com.apple.webClip.managed</string>
+			<key>PayloadUUID</key>
+			<string>6B0C1E52-3A7D-4F0E-9C1B-5D2E8A4F7B61</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+	</array>
+	<key>PayloadDisplayName</key>
+	<string>Slate</string>
+	<key>PayloadDescription</key>
+	<string>把 Slate（離線筆記、資料庫與待辦）加到主畫面。這個描述檔只會新增一個圖示，不會更改任何設定，也不會讀取裝置上的資料；隨時可以在「設定 → 一般 → VPN 與裝置管理」移除。</string>
+	<key>PayloadIdentifier</key>
+	<string>io.github.earningpershare.slate</string>
+	<key>PayloadOrganization</key>
+	<string>Slate (open source)</string>
+	<key>PayloadRemovalDisallowed</key>
+	<false/>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>A4D9F3C0-8E21-4B6A-B7F5-1C3E9D2A6048</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>

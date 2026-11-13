@@ -15,6 +15,7 @@ import {
 } from "./lib/autobackup";
 import { rememberSeed } from "./lib/link";
 import { SyncSection } from "./components/DeviceSync";
+import { InstallBar, InstallSection } from "./components/Install";
 import { Modal, NARROW, navigate, openPage, useLocalState, useMedia, useRoute } from "./ui";
 import Home from "./components/Home";
 import PageView from "./components/PageView";
@@ -190,6 +191,7 @@ export default function App() {
       <FocusTicker />
       <ReminderTicker />
       <Toaster />
+      <InstallBar />
       {sidebar && !narrow && (
         <div className="side-resize" style={{ left: (dragW ?? sideW) - 3 }} onPointerDown={startResize} />
       )}
@@ -536,6 +538,9 @@ function SettingsModal({
           </button>
         </div>
       )}
+
+      <h3>安裝到這台裝置</h3>
+      <InstallSection />
 
       <h3>跨裝置同步</h3>
       <SyncSection onMessage={setMsg} />

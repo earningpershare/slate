@@ -14,6 +14,8 @@ export default defineConfig({
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg,png,woff,woff2}"],
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
+        // the iPhone profile is a download, not a page of the app
+        navigateFallbackDenylist: [/\.mobileconfig$/],
       },
       manifest: {
         name: "Slate 離線工作區",
