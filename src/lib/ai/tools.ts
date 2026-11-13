@@ -122,7 +122,7 @@ export function safeBlocks(blocks: unknown[]): unknown[] {
 export const plain = (title: unknown) => {
   // control characters, line separators, and invisible formatting characters (zero-width, bidi overrides)
   // that could reorder or hide part of what the person is asked
-  const t = String(title ?? "").replace(/[p{Cc}p{Cf}p{Zl}p{Zp}]+/gu, " ").replace(/s+/g, " ").trim();
+  const t = String(title ?? "").replace(/\p{Cf}+/gu, "").replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/g, " ").trim();
   return t.length > 60 ? t.slice(0, 60) + "…" : t || "未命名";
 };
 
