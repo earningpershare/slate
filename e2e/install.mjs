@@ -27,12 +27,18 @@ const tabs = await iphone.locator(".tabbar").boundingBox();
 assert.ok(bar.y + bar.height <= tabs.y, "install bar covers the tab bar");
 console.log("ok   iPhone Safari is offered the profile");
 
-const res = await fetch(new URL(href, base));
-const body = await res.text();
-assert.equal(res.status, 200);
-assert.match(body, /com\.apple\.webClip\.managed/);
-assert.ok(!body.includes("<html"), "the profile address returned the app page");
-console.log("ok   the profile downloads (content-type: " + res.headers.get("content-type") + ")");
+// once the app's service worker is in charge, the profile arrives with Apple's content type
+// (a plain static host would send it as a generic download)
+await iphone.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 60_000 });
+const got = await iphone.evaluate(async (href) => {
+  const res = await fetch(href);
+  return { status: res.status, type: res.headers.get("content-type"), body: await res.text() };
+}, href);
+assert.equal(got.status, 200);
+assert.equal(got.type, "application/x-apple-aspen-config");
+assert.match(got.body, /com\.apple\.webClip\.managed/);
+assert.ok(!got.body.includes("<html"), "the profile address returned the app page");
+console.log("ok   the profile is served as " + got.type);
 
 await iphone.locator('.install-bar [aria-label="關閉"]').tap();
 await iphone.reload();

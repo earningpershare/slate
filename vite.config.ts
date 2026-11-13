@@ -16,6 +16,9 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
         // the iPhone profile is a download, not a page of the app
         navigateFallbackDenylist: [/\.mobileconfig$/],
+        // serves that profile with the content type iOS needs (see public/profile-sw.js)
+        importScripts: ["profile-sw.js"],
+        globIgnores: ["profile-sw.js"],
       },
       manifest: {
         name: "Slate 離線工作區",
