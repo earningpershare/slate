@@ -124,6 +124,12 @@ await step("the settings offer one download to double-click, and no commands", a
   assert.equal(await page.locator(".ai-setup .btn.primary >> text=儲存").isVisible(), false); // nothing to "save" on this tab
   const href = await page.locator(".ai-steps a.btn[download]").getAttribute("href");
   assert.equal(href, "slate.mcpb");
+  // the app it installs into comes first, with where to get it; and there is help for "nothing happened"
+  assert.equal(await page.locator(".ai-steps li").count(), 3);
+  assert.equal(await page.locator(".ai-steps li").first().locator("a").getAttribute("href"), "https://claude.ai/download");
+  await page.locator(".ai-help summary").click();
+  await page.waitForSelector(".ai-help >> text=Install Extension");
+  await page.locator(".ai-help summary").click();
   const file = Buffer.from(await (await fetch(new URL(href, base))).arrayBuffer());
   assert.equal(file.subarray(0, 2).toString(), "PK"); // a real archive, not the app's page
   assert.ok(file.includes(Buffer.from("manifest.json")));

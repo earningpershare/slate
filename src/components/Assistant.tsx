@@ -67,11 +67,32 @@ function SubscriptionSetup() {
       ) : (
         <ol className="ai-steps">
           <li>
-            <b>安裝到 Claude</b>
+            <b>先確認電腦上有 Claude 桌面版</b>
+            <span>
+              沒有的話到{" "}
+              <a href="https://claude.ai/download" target="_blank" rel="noreferrer">
+                claude.ai/download
+              </a>{" "}
+              安裝並登入。
+            </span>
+            <span className="muted small">要的是獨立的「Claude」應用程式；瀏覽器裡的 claude.ai 和 VS Code 裡的 Claude Code 都不算。</span>
+          </li>
+          <li>
+            <b>把 Slate 裝進 Claude</b>
             <a className="btn primary" href="slate.mcpb" download>
               <Download size={15} /> 下載 Claude 擴充功能
             </a>
             <span className="muted small">下載後點兩下那個檔案，Claude 桌面版會問你要不要安裝，按「安裝」。</span>
+            <details className="ai-help">
+              <summary>點兩下沒有反應？</summary>
+              <p>
+                通常是電腦上還沒有 Claude 桌面版（見上一步），或是它裝好後還沒開過。裝好並開啟一次之後再點兩下。
+              </p>
+              <p>
+                還是不行的話，從 Claude 裡面裝：打開 Claude 桌面版 → 設定（Settings）→ Extensions → Advanced settings → Install Extension…，選剛才下載的{" "}
+                <code className="inline">slate.mcpb</code>。
+              </p>
+            </details>
           </li>
           <li>
             <b>連接</b>

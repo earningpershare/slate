@@ -273,6 +273,9 @@ td:hover .cell-input[type="date"]::-webkit-calendar-picker-indicator,
 .ai-steps li::before { content: counter(step); position: absolute; left: 0; top: -1px; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-text); font-size: 13px; font-weight: 700; }
 .ai-steps q { font-weight: 600; quotes: "「" "」"; }
 .ai-mcp a.btn { color: var(--accent-text); height: 38px; }
+.ai-help { font-size: 12.5px; color: var(--muted); }
+.ai-help summary { cursor: pointer; color: var(--accent); }
+.ai-help p { margin: 6px 0 0 !important; line-height: 1.6; }
 .ai-advanced { border-top: 1px solid var(--line); padding-top: 8px; }
 .ai-advanced summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .ai-advanced[open] { display: flex; flex-direction: column; gap: 10px; }

@@ -109,7 +109,7 @@ Windows 上可以直接雙擊 `start.bat`。同步功能需要 HTTPS 或 localho
 - 模型來源自己選，設定只存在這台裝置上（不同步、不進備份）：
   - **API 金鑰**：從選單選服務（Claude、OpenAI、Google Gemini、OpenRouter、DeepSeek、Groq、Mistral、xAI、Together、Cerebras，或任何 OpenAI 相容的接口），
     貼上金鑰後模型清單會自動列出來。金鑰和對話從你的裝置直接送到該服務，沒有中間伺服器；每個服務各記各的金鑰。用量由該服務另外計費。
-  - **Claude 訂閱（Claude 桌面版）**：不用金鑰，也不用打指令。在助理的模型設定按「下載 Claude 擴充功能」，點兩下下載的 `slate.mcpb`，
+  - **Claude 訂閱（Claude 桌面版）**：不用金鑰，也不用打指令。電腦上要先有 Claude 桌面版（claude.ai/download；瀏覽器版和 Claude Code 不算）。在助理的模型設定按「下載 Claude 擴充功能」，點兩下下載的 `slate.mcpb`，
     Claude 桌面版會問要不要安裝；接著在 Claude 裡說「連接我的 Slate」，點它給的連結並按確定。之後直接在 Claude 裡說要做什麼，
     由開著的 Slate 分頁執行。兩邊用配對碼互相確認（連結裡就帶著，不用自己輸入），擴充功能不存資料、只接受本站的分頁；
     刪除時 Slate 會跳出視窗問你。只能在電腦上用。
