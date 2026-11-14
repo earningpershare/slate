@@ -8,9 +8,18 @@ import {
   type Assistant,
   CLAUDE_MODELS,
   isConfigured,
+  isLocalService,
+  listModels,
+  LOCAL_APPS,
+  type LocalProbe,
   loadSettings,
+  probeLocal,
   saveSettings,
+  SERVICES,
+  type ServiceId,
+  serviceName,
   type ToolEvent,
+  withService,
 } from "../lib/ai/assistant";
 import { bridgeCode, bridgeEnabled, setBridgeCode, setBridgeEnabled, useBridge, validCode } from "../lib/ai/bridge";
 
@@ -142,40 +151,84 @@ function SubscriptionSetup() {
   );
 }
 
-function Setup({ initial, onSave, onCancel }: { initial: AiSettings; onSave: (s: AiSettings) => void; onCancel?: () => void }) {
-  const [s, setS] = useState(initial);
-  const [plan, setPlan] = useState(false); // the "Claude plan" tab, which is not a chat provider
-  const set = (patch: Partial<AiSettings>) => {
-    setPlan(false);
-    setS((cur) => ({ ...cur, ...patch }));
-  };
+/** Lists the models a service offers once there is enough to ask with; typing a name by hand always works too. */
+function ModelPicker({ url, apiKey, needsKey, value, onChange }: { url: string; apiKey: string; needsKey: boolean; value: string; onChange: (model: string) => void }) {
+  const [found, setFound] = useState<{ state: "idle" | "loading" | "ok" | "error"; models: string[]; message?: string }>({ state: "idle", models: [] });
+  const [manual, setManual] = useState(false);
+  useEffect(() => {
+    if (!url.trim() || (needsKey && apiKey.trim().length < 8)) return void setFound({ state: "idle", models: [] });
+    const controller = new AbortController();
+    setFound((f) => ({ ...f, state: "loading" }));
+    // wait for the typing to stop before asking
+    const timer = setTimeout(() => {
+      listModels(url, apiKey, controller.signal).then(
+        (models) => setFound({ state: "ok", models }),
+        (e) => !controller.signal.aborted && setFound({ state: "error", models: [], message: e instanceof AiError ? e.message : "讀不到模型清單。" }),
+      );
+    }, 500);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [url, apiKey, needsKey]);
+
+  const listed = found.state === "ok" && found.models.length > 0;
   return (
-    <form
-      className="ai-setup auth-form"
-      onSubmit={(e) => {
-        e.preventDefault();
-        onSave(s);
-      }}
-    >
-      <p className="muted">助理可以幫你找資料、寫頁面、整理任務。選一個模型來源；設定只存在這台裝置上，不會同步，也不會進備份。</p>
-      <div className="seg">
-        <button type="button" className={"seg-btn" + (!plan && s.provider === "claude" ? " active" : "")} onClick={() => set({ provider: "claude" })}>
-          Claude API 金鑰
-        </button>
-        <button type="button" className={"seg-btn" + (!plan && s.provider === "local" ? " active" : "")} onClick={() => set({ provider: "local" })}>
-          本機模型
-        </button>
-        <button type="button" className={"seg-btn" + (plan ? " active" : "")} onClick={() => setPlan(true)}>
-          Claude 訂閱
-        </button>
-      </div>
-      {plan ? (
-        <SubscriptionSetup />
-      ) : s.provider === "claude" ? (
+    <>
+      <label>
+        模型
+        {listed && !manual ? (
+          <select className="input ai-models" value={found.models.includes(value) ? value : ""} onChange={(e) => onChange(e.target.value)}>
+            <option value="">請選擇模型（共 {found.models.length} 個）</option>
+            {found.models.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input className="input" autoComplete="off" spellCheck={false} placeholder="模型名稱" aria-label="模型名稱" value={value} onChange={(e) => onChange(e.target.value)} />
+        )}
+      </label>
+      <p className={"muted small ai-model-state" + (found.state === "error" ? " error" : "")} role="status">
+        {found.state === "idle" && needsKey && "貼上金鑰後，這裡會自動列出可以用的模型。"}
+        {found.state === "loading" && "正在讀取模型清單…"}
+        {found.state === "error" && `${found.message} 也可以直接輸入模型名稱。`}
+        {found.state === "ok" && !listed && "這個服務沒有提供模型清單，請直接輸入模型名稱。"}
+        {listed && (
+          <button type="button" className="ai-link" onClick={() => setManual((m) => !m)}>
+            {manual ? "從清單選" : "清單裡沒有？手動輸入"}
+          </button>
+        )}
+      </p>
+    </>
+  );
+}
+
+function KeySetup({ s, set, pick }: { s: AiSettings; set: (patch: Partial<AiSettings>) => void; pick: (service: ServiceId) => void }) {
+  const service = SERVICES.find((x) => x.id === s.service) ?? SERVICES[0];
+  const where = service.keys && (
+    <a href={"https://" + service.keys} target="_blank" rel="noreferrer">
+      {service.keys.split("/")[0]}
+    </a>
+  );
+  return (
+    <>
+      <label>
+        服務
+        <select className="input" value={service.id} onChange={(e) => pick(e.target.value as ServiceId)}>
+          {SERVICES.map((x) => (
+            <option key={x.id} value={x.id}>
+              {x.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {service.id === "anthropic" ? (
         <>
           <label>
             API 金鑰
-            <input className="input" type="password" autoComplete="off" placeholder="sk-ant-…" value={s.claudeKey} onChange={(e) => set({ claudeKey: e.target.value })} />
+            <input className="input" type="password" autoComplete="off" placeholder={service.hint} value={s.claudeKey} onChange={(e) => set({ claudeKey: e.target.value })} />
           </label>
           <label>
             模型
@@ -188,32 +241,195 @@ function Setup({ initial, onSave, onCancel }: { initial: AiSettings; onSave: (s:
             </select>
           </label>
           <p className="muted small">
-            金鑰在 platform.claude.com 申請，用量依 API 價格另外計費；Claude 的 Pro／Max 訂閱不能用在這裡。金鑰只會從這台裝置直接送到 Anthropic。
+            金鑰在 {where} 申請，用量依 API 價格另外計費；Claude 的 Pro／Max 訂閱請改用「Claude 訂閱」那一頁。金鑰只會從這台裝置直接送到 Anthropic。
             你的訊息和助理讀到的頁面內容會送給 Anthropic 處理。
           </p>
         </>
       ) : (
         <>
+          {service.id === "custom" && (
+            <label>
+              位址
+              <input className="input" autoComplete="off" spellCheck={false} placeholder="https://…/v1" value={s.localUrl} onChange={(e) => set({ localUrl: e.target.value })} />
+            </label>
+          )}
           <label>
-            位址（OpenAI 相容接口）
-            <input className="input" autoComplete="off" value={s.localUrl} onChange={(e) => set({ localUrl: e.target.value })} />
+            API 金鑰{service.id === "custom" ? "（沒有就留空）" : ""}
+            <input className="input" type="password" autoComplete="off" placeholder={service.hint} value={s.localKey} onChange={(e) => set({ localKey: e.target.value })} />
           </label>
-          <label>
-            模型名稱
-            <input className="input" autoComplete="off" placeholder="例如 qwen2.5:14b" value={s.localModel} onChange={(e) => set({ localModel: e.target.value })} />
-          </label>
-          <label>
-            金鑰（通常不用填）
-            <input className="input" type="password" autoComplete="off" value={s.localKey} onChange={(e) => set({ localKey: e.target.value })} />
-          </label>
+          <ModelPicker url={s.localUrl} apiKey={s.localKey} needsKey={service.id !== "custom"} value={s.localModel} onChange={(localModel) => set({ localModel })} />
           <p className="muted small">
-            適用 Ollama、LM Studio 等在自己電腦上執行的模型，資料完全不離開這台電腦。模型要支援工具呼叫（tools）。 Ollama 需要先允許這個網站連線：設定環境變數
-            OLLAMA_ORIGINS={location.origin} 後重新啟動 Ollama。第一次使用時瀏覽器會問是否允許這個網站連線到這台裝置上的應用程式，請按允許。小模型操作工具的能力比 Claude 弱，複雜的要求比較容易出錯。
+            {where && <>金鑰在 {where} 申請，用量由該服務另外計費。</>}
+            金鑰只會從這台裝置直接送到這個服務。你的訊息和助理讀到的頁面內容會送給它處理。請選支援工具呼叫（tools／function calling）的模型，否則助理沒辦法動手做事。
           </p>
         </>
       )}
-      <div className="row" style={plan ? { display: "none" } : undefined}>
-        <button className="btn primary" disabled={!isConfigured(s)}>
+    </>
+  );
+}
+
+/** The line that lets Ollama accept requests from this site, for the computer at hand. */
+function ollamaCommand(): string {
+  const origin = location.origin;
+  if (/Windows/.test(navigator.userAgent)) return `setx OLLAMA_ORIGINS "${origin}"`;
+  if (/Macintosh/.test(navigator.userAgent)) return `launchctl setenv OLLAMA_ORIGINS "${origin}"`;
+  return `OLLAMA_ORIGINS="${origin}" ollama serve`;
+}
+
+function LocalSetup({ s, set, choose }: { s: AiSettings; set: (patch: Partial<AiSettings>) => void; choose: (service: ServiceId, model: string) => void }) {
+  const [probes, setProbes] = useState<Record<string, LocalProbe | "checking">>({});
+  const [copied, setCopied] = useState(false);
+  const detect = () => {
+    setProbes(Object.fromEntries(LOCAL_APPS.map((a) => [a.id, "checking" as const])));
+    for (const app of LOCAL_APPS) void probeLocal(app.url).then((p) => setProbes((cur) => ({ ...cur, [app.id]: p })));
+  };
+  useEffect(detect, []);
+  const command = ollamaCommand();
+  const windows = /Windows/.test(navigator.userAgent);
+
+  return (
+    <div className="ai-local">
+      <p className="muted small">
+        在自己電腦上執行的模型，資料完全不離開這台電腦。下面會自動尋找已經在執行的程式。第一次瀏覽器會問是否允許這個網站連線到這台裝置上的應用程式，請按允許。
+      </p>
+      {LOCAL_APPS.map((app) => {
+        const p = probes[app.id];
+        const mine = s.service === app.id;
+        return (
+          <section key={app.id} className={"ai-app" + (mine ? " chosen" : "")}>
+            <header>
+              <b>{app.name}</b>
+              <span className={"ai-app-state" + (p && p !== "checking" ? " " + p.state : "")}>
+                {!p || p === "checking" ? "尋找中…" : p.state === "ok" ? `已找到，${p.models.length} 個模型` : p.state === "blocked" ? "有在執行，但還不允許這個網站連線" : "沒有偵測到"}
+              </span>
+            </header>
+            {p && p !== "checking" && p.state === "ok" && (
+              <label>
+                模型
+                <select className="input ai-models" value={mine ? s.localModel : ""} onChange={(e) => choose(app.id, e.target.value)}>
+                  <option value="">{p.models.length ? "請選擇模型" : "還沒有下載任何模型"}</option>
+                  {p.models.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {p && p !== "checking" && p.state === "blocked" && app.id === "ollama" && (
+              <ol className="ai-fix">
+                <li>
+                  複製這一行：
+                  <code>{command}</code>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(command).catch(() => undefined);
+                      setCopied(true);
+                    }}
+                  >
+                    {copied ? "已複製" : "複製"}
+                  </button>
+                </li>
+                <li>{windows ? "按 Windows 鍵，輸入 cmd 開啟「命令提示字元」，貼上後按 Enter。" : "打開「終端機」，貼上後按 Enter。"}</li>
+                <li>把 Ollama 完全結束（{windows ? "右下角工作列圖示按右鍵 → Quit" : "選單列圖示 → Quit"}），再重新打開。</li>
+                <li>回到這裡按「重新偵測」。</li>
+              </ol>
+            )}
+            {p && p !== "checking" && p.state === "blocked" && app.id === "lmstudio" && (
+              <ol className="ai-fix">
+                <li>在 LM Studio 左側打開「Developer」（開發者）頁。</li>
+                <li>在伺服器的設定（Settings）裡打開「Enable CORS」，並確認伺服器是啟動狀態。</li>
+                <li>回到這裡按「重新偵測」。</li>
+              </ol>
+            )}
+            {p && p !== "checking" && p.state === "absent" && (
+              <p className="muted small">
+                還沒安裝的話可以到{" "}
+                <a href={"https://" + app.site} target="_blank" rel="noreferrer">
+                  {app.site}
+                </a>{" "}
+                下載；已經安裝的話請先打開它{app.id === "lmstudio" ? "，並在 Developer 頁啟動伺服器" : ""}。
+              </p>
+            )}
+          </section>
+        );
+      })}
+      <button type="button" className="btn" onClick={detect}>
+        重新偵測
+      </button>
+      <details className="ai-advanced" open={s.service === "local-custom"}>
+        <summary>其他程式或不同的連接埠</summary>
+        <label>
+          位址
+          <input
+            className="input"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="http://localhost:8080/v1"
+            value={s.service === "local-custom" ? s.localUrl : ""}
+            onChange={(e) => (s.service === "local-custom" ? set({ localUrl: e.target.value }) : set({ ...withService(s, "local-custom"), localUrl: e.target.value }))}
+          />
+        </label>
+        <label>
+          模型名稱
+          <input
+            className="input"
+            autoComplete="off"
+            spellCheck={false}
+            value={s.service === "local-custom" ? s.localModel : ""}
+            onChange={(e) => (s.service === "local-custom" ? set({ localModel: e.target.value }) : set({ ...withService(s, "local-custom"), localModel: e.target.value }))}
+          />
+        </label>
+      </details>
+      <p className="muted small">模型要支援工具呼叫（tools）才能操作 Slate。小模型操作工具的能力比大型模型弱，複雜的要求比較容易出錯。</p>
+    </div>
+  );
+}
+
+function Setup({ initial, onSave, onCancel }: { initial: AiSettings; onSave: (s: AiSettings) => void; onCancel?: () => void }) {
+  const [s, setS] = useState(initial);
+  const [tab, setTab] = useState<"key" | "local" | "plan">(isLocalService(initial.service) ? "local" : "key");
+  const set = (patch: Partial<AiSettings>) => setS((cur) => ({ ...cur, ...patch }));
+  const pick = (service: ServiceId) => setS((cur) => withService(cur, service));
+  const ready = isConfigured(s) && (tab === "local") === isLocalService(s.service);
+  return (
+    <form
+      className="ai-setup auth-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (ready) onSave(s);
+      }}
+    >
+      <p className="muted">助理可以幫你找資料、寫頁面、整理任務。選一個模型來源；設定只存在這台裝置上，不會同步，也不會進備份。</p>
+      <div className="seg">
+        <button
+          type="button"
+          className={"seg-btn" + (tab === "key" ? " active" : "")}
+          onClick={() => {
+            setTab("key");
+            if (isLocalService(s.service)) pick("anthropic");
+          }}
+        >
+          API 金鑰
+        </button>
+        <button type="button" className={"seg-btn" + (tab === "local" ? " active" : "")} onClick={() => setTab("local")}>
+          本機模型
+        </button>
+        <button type="button" className={"seg-btn" + (tab === "plan" ? " active" : "")} onClick={() => setTab("plan")}>
+          Claude 訂閱
+        </button>
+      </div>
+      {tab === "plan" ? (
+        <SubscriptionSetup />
+      ) : tab === "key" ? (
+        <KeySetup s={s} set={set} pick={pick} />
+      ) : (
+        <LocalSetup s={s} set={set} choose={(service, model) => setS((cur) => ({ ...withService(cur, service), localModel: model }))} />
+      )}
+      <div className="row" style={tab === "plan" ? { display: "none" } : undefined}>
+        <button className="btn primary" disabled={!ready}>
           儲存
         </button>
         {onCancel && (
@@ -305,7 +521,11 @@ export default function AssistantPanel({ onClose }: { onClose: () => void }) {
       <header className="ai-head">
         <b>AI 助理</b>
         <span className="muted small ai-model">
-          {isConfigured(settings) ? (settings.provider === "claude" ? CLAUDE_MODELS.find((m) => m.id === settings.claudeModel)?.name : settings.localModel) : ""}
+          {isConfigured(settings)
+            ? settings.provider === "claude"
+              ? CLAUDE_MODELS.find((m) => m.id === settings.claudeModel)?.name
+              : `${serviceName(settings.service)}・${settings.localModel}`
+            : ""}
         </span>
         <button className="btn ghost" title="新對話" aria-label="新對話" onClick={reset}>
           <Plus size={16} />

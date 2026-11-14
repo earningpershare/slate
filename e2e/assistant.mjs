@@ -87,6 +87,23 @@ const say = async (text) => {
 };
 const lastReply = () => page.locator(".ai-msg.assistant").last();
 
+// Ollama and LM Studio at their usual addresses: played here, so the test does not depend on
+// what this computer happens to have installed.
+let ollama = "absent";
+const ollamaRequests = [];
+const corsAny = { "access-control-allow-origin": "*", "access-control-allow-headers": "*" };
+await page.route("http://localhost:1234/**", (route) => route.abort("connectionrefused"));
+await page.route("http://localhost:11434/**", async (route) => {
+  const req = route.request();
+  if (ollama === "absent") return route.abort("connectionrefused");
+  if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: corsAny });
+  if (req.url().endsWith("/models")) {
+    return route.fulfill({ status: 200, headers: { ...corsAny, "content-type": "application/json" }, body: JSON.stringify({ data: [{ id: "qwen2.5:14b" }, { id: "nomic-embed-text" }] }) });
+  }
+  ollamaRequests.push(req.postDataJSON());
+  await route.fulfill({ status: 200, headers: { ...corsAny, "content-type": "application/json" }, body: JSON.stringify({ choices: [{ message: { role: "assistant", content: "我是在你電腦上的模型。" } }] }) });
+});
+
 await page.goto(base);
 await page.waitForSelector(".page-title");
 
@@ -95,6 +112,10 @@ await step("the panel opens from the sidebar and asks for a model first", async 
   await page.waitForSelector(".ai-panel .ai-setup");
   assert.equal(await page.locator(".ai-setup .btn.primary").isDisabled(), true); // nothing to save yet
   await page.locator(".ai-setup .seg-btn", { hasText: "本機模型" }).click();
+  // it looks for the usual programs by itself; none is running here
+  await page.waitForFunction(() => document.querySelectorAll(".ai-app-state.absent").length === 2);
+  // a program at another address is entered by hand
+  await page.locator(".ai-advanced summary").click();
   await page.locator(".ai-setup label", { hasText: "位址" }).locator("input").fill(`http://localhost:${MOCK}/v1/`);
   await page.locator(".ai-setup label", { hasText: "模型名稱" }).locator("input").fill("test-model");
   await page.locator(".ai-setup .btn.primary").click();
@@ -157,9 +178,29 @@ await step("a model that calls tools wrongly changes nothing and gets told why",
   assert.match(results[1], /no tool called "no_such_tool"/);
 });
 
+await step("Ollama running on the computer is found and listed without typing anything", async () => {
+  ollama = "ok";
+  await page.locator('.ai-head [aria-label="模型設定"]').click();
+  await page.locator(".ai-local .btn", { hasText: "重新偵測" }).click();
+  const card = page.locator(".ai-app", { hasText: "Ollama" });
+  await card.locator(".ai-app-state.ok >> text=已找到，1 個模型").waitFor(); // the embedding model is not offered
+  assert.deepEqual(await card.locator("select option").allInnerTexts(), ["請選擇模型", "qwen2.5:14b"]);
+  await card.locator("select").selectOption("qwen2.5:14b");
+  if (shots) await page.screenshot({ path: shots + "/ai-04-local.png" });
+  await page.locator(".ai-setup .btn.primary").click();
+  assert.equal(await page.locator(".ai-head .ai-model").innerText(), "Ollama・qwen2.5:14b");
+  await say("你是誰");
+  await page.waitForSelector(".ai-text >> text=我是在你電腦上的模型。");
+  assert.equal(ollamaRequests[0].model, "qwen2.5:14b");
+  assert.equal(ollamaRequests[0].stream, false); // programs on the computer are asked the plain way
+  ollama = "absent";
+});
+
 await step("an unreachable model server gives a message that says what to check", async () => {
   await page.locator('.ai-head [aria-label="模型設定"]').click();
+  await page.locator(".ai-advanced summary").click();
   await page.locator(".ai-setup label", { hasText: "位址" }).locator("input").fill("http://localhost:5990/v1");
+  await page.locator(".ai-setup label", { hasText: "模型名稱" }).locator("input").fill("test-model");
   await page.locator(".ai-setup .btn.primary").click();
   await say("在嗎");
   await page.waitForSelector(".ai-msg.error >> text=OLLAMA_ORIGINS");
@@ -205,7 +246,8 @@ await page.route("https://api.anthropic.com/**", async (route) => {
 
 await step("Claude: the key goes straight to Anthropic, and the tool loop does the work", async () => {
   await page.locator('.ai-head [aria-label="模型設定"]').click();
-  await page.locator(".ai-setup .seg-btn", { hasText: "Claude API 金鑰" }).click();
+  await page.locator(".ai-setup .seg-btn", { hasText: "API 金鑰" }).click();
+  assert.equal(await page.locator(".ai-setup select").first().inputValue(), "anthropic"); // Claude is the first choice
   await page.locator(".ai-setup input[type=password]").fill("sk-ant-test-key");
   await page.locator(".ai-setup .btn.primary").click();
   assert.match(await page.locator(".ai-head .ai-model").innerText(), /Claude Opus 5\.5/);
@@ -245,11 +287,90 @@ await step("Claude: a rejected key is explained, not dumped as an error code", a
   claudeStatus = 200;
 });
 
+// ---------- another company's models, with its API intercepted ----------
+const openaiRequests = [];
+const chunk = (delta, finish = null) => `data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+await page.route("https://api.openai.com/**", async (route) => {
+  const req = route.request();
+  if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: corsAny });
+  const key = req.headers()["authorization"];
+  if (req.url().endsWith("/models")) {
+    if (key !== "Bearer sk-openai-test") return route.fulfill({ status: 401, headers: { ...corsAny, "content-type": "application/json" }, body: '{"error":{"message":"Incorrect API key"}}' });
+    return route.fulfill({ status: 200, headers: { ...corsAny, "content-type": "application/json" }, body: JSON.stringify({ data: [{ id: "gpt-test" }, { id: "text-embedding-3-large" }, { id: "gpt-test-mini" }, { id: "whisper-1" }] }) });
+  }
+  const body = req.postDataJSON();
+  openaiRequests.push({ key, body });
+  const last = body.messages[body.messages.length - 1];
+  // streamed the way these services do it: text in pieces, a tool call's arguments in fragments
+  const events =
+    last.role === "tool"
+      ? [chunk({ role: "assistant", content: "已經" }), chunk({ content: "加好了，" }), chunk({ content: "在「採買」清單。" }), chunk({}, "stop"), "data: [DONE]\n\n"]
+      : [
+          chunk({ role: "assistant", content: null, tool_calls: [{ index: 0, id: "call_abc", type: "function", function: { name: "add_task", arguments: "" } }] }),
+          chunk({ tool_calls: [{ index: 0, function: { arguments: '{"title":"買雞蛋",' } }] }),
+          chunk({ tool_calls: [{ index: 0, function: { arguments: '"list":"採買"}' } }] }),
+          chunk({}, "tool_calls"),
+          "data: [DONE]\n\n",
+        ];
+  await route.fulfill({ status: 200, headers: { ...corsAny, "content-type": "text/event-stream" }, body: events.join("") });
+});
+
+await step("another service: pick it, paste a key, and its models are listed", async () => {
+  await page.locator('.ai-head [aria-label="模型設定"]').click();
+  const service = page.locator(".ai-setup select").first();
+  assert.ok((await service.locator("option").allInnerTexts()).length >= 10);
+  await service.selectOption("openai");
+  await page.waitForSelector(".ai-model-state >> text=貼上金鑰後，這裡會自動列出可以用的模型");
+  assert.equal(await page.locator(".ai-setup .btn.primary").isDisabled(), true);
+  // a wrong key is caught here, before any conversation
+  await page.locator(".ai-setup input[type=password]").fill("sk-wrong-key");
+  await page.waitForSelector(".ai-model-state.error >> text=金鑰無效");
+  await page.locator(".ai-setup input[type=password]").fill("sk-openai-test");
+  await page.waitForSelector(".ai-models");
+  assert.deepEqual(await page.locator(".ai-models option").allInnerTexts(), ["請選擇模型（共 2 個）", "gpt-test", "gpt-test-mini"]); // only models that can chat
+  assert.equal(await page.locator(".ai-setup .btn.primary").isDisabled(), true); // still no model chosen
+  await page.locator(".ai-models").selectOption("gpt-test");
+  if (shots) await page.screenshot({ path: shots + "/ai-05-service.png" });
+  await page.locator(".ai-setup .btn.primary").click();
+  assert.equal(await page.locator(".ai-head .ai-model").innerText(), "OpenAI・gpt-test");
+});
+
+await step("another service: the streamed reply and tool call work like Claude's", async () => {
+  await say("幫我記一下要買雞蛋");
+  await page.waitForSelector(".ai-text >> text=已經加好了，在「採買」清單。");
+  await page.waitForSelector(".ai-tool.done >> text=新增任務「買雞蛋」");
+  const task = (await store("tasks")).find((t) => t.title === "買雞蛋");
+  assert.ok((await store("lists")).some((l) => l.name === "採買" && l.id === task.listId));
+  const [first, second] = openaiRequests;
+  assert.equal(first.key, "Bearer sk-openai-test");
+  assert.deepEqual([first.body.model, first.body.stream], ["gpt-test", true]);
+  assert.ok(first.body.tools.length >= 12);
+  // the call pieced together from fragments goes back whole, answered under its own id
+  const [assistantTurn, toolTurn] = second.body.messages.slice(-2);
+  assert.deepEqual(assistantTurn.tool_calls, [{ id: "call_abc", type: "function", function: { name: "add_task", arguments: '{"title":"買雞蛋","list":"採買"}' } }]);
+  assert.equal(toolTurn.tool_call_id, "call_abc");
+});
+
+await step("each service keeps its own key when switching back and forth", async () => {
+  await page.locator('.ai-head [aria-label="模型設定"]').click();
+  const service = page.locator(".ai-setup select").first();
+  await service.selectOption("anthropic");
+  assert.equal(await page.locator(".ai-setup input[type=password]").inputValue(), "sk-ant-test-key");
+  await service.selectOption("gemini");
+  assert.equal(await page.locator(".ai-setup input[type=password]").inputValue(), ""); // never another company's key
+  await service.selectOption("openai");
+  assert.equal(await page.locator(".ai-setup input[type=password]").inputValue(), "sk-openai-test");
+  await page.waitForSelector(".ai-models");
+  assert.equal(await page.locator(".ai-models").inputValue(), "gpt-test");
+  await page.locator(".ai-setup .btn", { hasText: "取消" }).click();
+});
+
 await step("settings stay on this device and out of backups and sync", async () => {
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("ai-settings")));
   assert.equal(saved.claudeKey, "sk-ant-test-key");
   const everything = JSON.stringify([await store("meta"), await store("pages"), await store("tasks")]);
   assert.ok(!everything.includes("sk-ant-test-key"));
+  assert.ok(!everything.includes("sk-openai-test"));
 });
 
 await step("no console errors", async () => {

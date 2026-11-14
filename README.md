@@ -107,15 +107,17 @@ Windows 上可以直接雙擊 `start.bat`。同步功能需要 HTTPS 或 localho
 - 用說的管理工作區：找資料、建立與改寫頁面、整理資料庫、新增與調整任務。助理直接在你的 Slate 裡動手，
   刪除類的動作會先問你；被改寫的頁面可以從版本歷史還原。
 - 模型來源自己選，設定只存在這台裝置上（不同步、不進備份）：
-  - **Claude API 金鑰**：金鑰和對話從你的裝置直接送到 Anthropic，沒有中間伺服器。用量依 API 計費，Claude 的 Pro／Max 訂閱不適用。
+  - **API 金鑰**：從選單選服務（Claude、OpenAI、Google Gemini、OpenRouter、DeepSeek、Groq、Mistral、xAI、Together、Cerebras，或任何 OpenAI 相容的接口），
+    貼上金鑰後模型清單會自動列出來。金鑰和對話從你的裝置直接送到該服務，沒有中間伺服器；每個服務各記各的金鑰。用量由該服務另外計費。
   - **Claude 訂閱（Claude 桌面版）**：不用金鑰，也不用打指令。在助理的模型設定按「下載 Claude 擴充功能」，點兩下下載的 `slate.mcpb`，
     Claude 桌面版會問要不要安裝；接著在 Claude 裡說「連接我的 Slate」，點它給的連結並按確定。之後直接在 Claude 裡說要做什麼，
     由開著的 Slate 分頁執行。兩邊用配對碼互相確認（連結裡就帶著，不用自己輸入），擴充功能不存資料、只接受本站的分頁；
     刪除時 Slate 會跳出視窗問你。只能在電腦上用。
     Claude Code 或其他 MCP 用戶端改用單檔的 `slate-mcp.mjs`（`claude mcp add slate -- node slate-mcp.mjs`，再執行 `node slate-mcp.mjs pair` 取得連結）。
     自己架站的話要設 `SLATE_URL` 和 `SLATE_ORIGINS`。
-  - **本機模型**：Ollama、LM Studio 等提供 OpenAI 相容接口的程式，資料完全不離開電腦。模型要支援工具呼叫；
-    Ollama 要先設定 `OLLAMA_ORIGINS` 允許這個網站連線。小模型操作工具比較容易出錯。
+  - **本機模型**：自動尋找這台電腦上執行中的 Ollama 和 LM Studio，找到就列出已安裝的模型讓你點選，資料完全不離開電腦。
+    程式有在跑但不允許網頁連線時，畫面會給出對應的設定步驟（Ollama 是一行可以複製的設定，LM Studio 是介面上的開關）。
+    模型要支援工具呼叫；小模型操作工具比較容易出錯。
 - 實作：`src/lib/ai/tools.ts` 是和模型無關的工具層（有單元測試），`claude.ts`、`local.ts` 是兩種模型來源，`bridge.ts` 加上 `public/slate-mcp.mjs` 是給 MCP 用戶端的橋；
   `e2e/assistant.mjs`、`e2e/mcp.mjs` 用假模型和假 MCP 用戶端把整個流程跑一遍。改了工具的名稱或參數、或橋接程式本身之後，要執行 `npm run make-mcp` 更新橋接程式裡的工具清單和 `public/slate.mcpb`（有測試會檢查兩者一致）。
 
