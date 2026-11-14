@@ -273,7 +273,13 @@ td:hover .cell-input[type="date"]::-webkit-calendar-picker-indicator,
 .ai-steps li::before { content: counter(step); position: absolute; left: 0; top: -1px; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-text); font-size: 13px; font-weight: 700; }
 .ai-steps q { font-weight: 600; quotes: "「" "」"; }
 .ai-mcp a.btn { color: var(--accent-text); height: 38px; }
-.ai-help { font-size: 12.5px; color: var(--muted); }
+.ai-app-choice { align-self: stretch !important; display: flex; }
+.ai-app-choice .seg-btn { flex: 1; padding: 6px 8px; }
+.ai-copy { align-self: stretch; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.ai-copy pre { margin: 0; align-self: stretch; padding: 8px 10px; border-radius: 8px; background: var(--hover); font: 12px/1.6 ui-monospace, Consolas, "Microsoft JhengHei", monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }
+.ai-steps li.ai-step-plain { padding-left: 0; counter-increment: none; }
+.ai-steps li.ai-step-plain::before { content: none; }
+.ai-help { font-size: 12.5px; color: var(--muted); align-self: stretch; }
 .ai-help summary { cursor: pointer; color: var(--accent); }
 .ai-help p { margin: 6px 0 0 !important; line-height: 1.6; }
 .ai-advanced { border-top: 1px solid var(--line); padding-top: 8px; }

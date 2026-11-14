@@ -14,7 +14,7 @@
 // for "the Slate pairing code") and paste it into Slate once.
 //
 // Set-up (needs Node 18 or newer, no install step):
-//   Claude Code:     claude mcp add slate -- node /path/to/slate-mcp.mjs
+//   Claude Code:     node slate-mcp.mjs install      (keeps a copy in ~/.slate and registers it)
 //   Claude Desktop:  add to claude_desktop_config.json
 //                    { "mcpServers": { "slate": { "command": "node", "args": ["/path/to/slate-mcp.mjs"] } } }
 //
@@ -28,6 +28,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const PORT = Number(process.env.SLATE_MCP_PORT || 47800);
 const ORIGINS = new Set(
@@ -451,6 +453,46 @@ const CODE = KEY.replace(/(.{4})(?=.)/g, "$1-");
 const SLATE_URL = (process.env.SLATE_URL || "https://slate.16888u.com/").replace(/#.*$/, "");
 const LINK = SLATE_URL + "#/pair/" + CODE;
 const CONNECT = `To connect, the person opens this link in the browser where they use Slate, and confirms there: ${LINK}\nTell them: Slate will ask for confirmation and show a pairing code ending in ${CODE.slice(-4)}; they should press OK only if it shows that ending.`;
+
+// "install": set this program up for Claude Code in one go. It keeps a copy of itself in a
+// fixed place (so the download can be deleted) and registers that copy for every project.
+if (process.argv[2] === "install") {
+  const dir = process.env.SLATE_MCP_DIR || path.join(os.homedir(), ".slate");
+  const home = path.join(dir, "slate-mcp.mjs");
+  const self = fileURLToPath(import.meta.url);
+  fs.mkdirSync(dir, { recursive: true });
+  if (path.resolve(self) !== path.resolve(home)) fs.copyFileSync(self, home);
+  const claude = process.env.SLATE_CLAUDE || "claude";
+  const quote = (s) => `"${s}"`;
+  // the same node that is running this, by its full path: no guessing which one a restart will find
+  spawnSync(`${claude} mcp remove --scope user slate`, { shell: true, stdio: "ignore" });
+  const added = spawnSync(`${claude} mcp add --scope user slate -- ${quote(process.execPath)} ${quote(home)}`, { shell: true, encoding: "utf8" });
+  if (added.status !== 0) {
+    console.log(
+      "Slate could not register itself with Claude Code automatically" +
+        (added.stderr ? " (" + added.stderr.trim().split("\n")[0] + ")" : " (is the 'claude' command installed?)") +
+        ".\n\nThe program is saved at:\n    " +
+        home +
+        "\n\nRegister it by hand with:\n    claude mcp add --scope user slate -- " +
+        quote(process.execPath) +
+        " " +
+        quote(home),
+    );
+    process.exit(1);
+  }
+  console.log(
+    "Slate is now registered with Claude Code (for every project).\n\n" +
+      "1. Restart Claude Code so it loads Slate. In VS Code: Ctrl+Shift+P → \"Developer: Reload Window\".\n" +
+      "2. Open this link in the browser where you use Slate, and press OK there:\n\n    " +
+      LINK +
+      "\n\n   (Slate will show a pairing code ending in " +
+      CODE.slice(-4) +
+      ".)\n" +
+      "3. Keep Slate open in that browser, and ask Claude things like: 看看我 Slate 今天的任務\n\n" +
+      "To undo: claude mcp remove --scope user slate",
+  );
+  process.exit(0);
+}
 
 if (process.argv[2] === "pair") {
   console.log("Open this link in the browser where you use Slate:\n\n    " + LINK + "\n\nOr paste this pairing code in Slate (AI 助理 → 模型設定 → Claude 訂閱 → 進階):\n\n    " + CODE);

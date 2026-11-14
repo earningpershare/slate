@@ -125,7 +125,7 @@ await step("the settings offer one download to double-click, and no commands", a
   const href = await page.locator(".ai-steps a.btn[download]").getAttribute("href");
   assert.equal(href, "slate.mcpb");
   // the app it installs into comes first, with where to get it; and there is help for "nothing happened"
-  assert.equal(await page.locator(".ai-steps li").count(), 3);
+  assert.equal(await page.locator(".ai-steps > li").count(), 3);
   assert.equal(await page.locator(".ai-steps li").first().locator("a").getAttribute("href"), "https://claude.ai/download");
   await page.locator(".ai-help summary").click();
   await page.waitForSelector(".ai-help >> text=Install Extension");
@@ -133,10 +133,47 @@ await step("the settings offer one download to double-click, and no commands", a
   const file = Buffer.from(await (await fetch(new URL(href, base))).arrayBuffer());
   assert.equal(file.subarray(0, 2).toString(), "PK"); // a real archive, not the app's page
   assert.ok(file.includes(Buffer.from("manifest.json")));
-  // the command line is there for those who want it, but folded away
+  // manual set-up is there for those who want it, but folded away
   assert.equal(await page.locator(".ai-advanced").getAttribute("open"), null);
   assert.equal(await page.locator(".ai-advanced code").first().isVisible(), false);
   if (shots) await page.screenshot({ path: shots + "/mcp-00-setup.png" });
+});
+
+await step("Claude Code users get one message to paste, and the bridge installs itself", async () => {
+  await page.locator(".ai-app-choice .seg-btn", { hasText: "Claude Code" }).click();
+  const ask = await page.locator(".ai-steps .ai-copy pre").first().innerText();
+  assert.ok(ask.includes(base + "slate-mcp.mjs") && ask.includes("install"));
+  assert.equal(await page.locator(".ai-steps a[href='https://claude.ai/download']").count(), 0); // nothing else to install
+  if (shots) await page.screenshot({ path: shots + "/mcp-00-code.png" });
+
+  // what Claude Code would then run: the downloaded file, with "install"
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "slate-install-"));
+  const download = path.join(dir, "download", "slate-mcp.mjs");
+  fs.mkdirSync(path.dirname(download));
+  fs.writeFileSync(download, await (await fetch(base + "slate-mcp.mjs")).text());
+  // a stand-in for the "claude" command that writes down what it was asked
+  const fake = path.join(dir, "fake-claude.mjs");
+  const log = path.join(dir, "calls.txt");
+  fs.writeFileSync(fake, `import fs from "node:fs"; fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + "\\n");`);
+  const run = (claude) =>
+    spawnSync(process.execPath, [download, "install"], { env: { ...env, SLATE_MCP_DIR: path.join(dir, "home"), SLATE_CLAUDE: claude }, encoding: "utf8" });
+  const done = run(`"${process.execPath}" "${fake}"`);
+  assert.equal(done.status, 0);
+  const kept = path.join(dir, "home", "slate-mcp.mjs");
+  assert.equal(fs.readFileSync(kept, "utf8"), fs.readFileSync(download, "utf8")); // a copy that outlives the download
+  const calls = fs.readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.deepEqual(calls[0], ["mcp", "remove", "--scope", "user", "slate"]); // so running it twice does not pile up
+  assert.deepEqual(calls[1], ["mcp", "add", "--scope", "user", "slate", "--", process.execPath, kept]);
+  assert.ok(done.stdout.includes(LINK) && done.stdout.includes("ending in " + CODE.slice(-4)) && done.stdout.includes("Reload Window"));
+  // and the registered copy really is the bridge
+  const hello = spawnSync(process.execPath, [kept], { env, input: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n', encoding: "utf8", timeout: 20_000 });
+  assert.ok(JSON.parse(hello.stdout.split("\n")[0]).result.tools.length >= 13);
+
+  // no Claude Code on the computer: say so, and how to finish by hand
+  const failed = run("slate-no-such-command");
+  assert.equal(failed.status, 1);
+  assert.match(failed.stdout, /could not register itself.*claude mcp add --scope user slate -- /s);
+  await page.locator(".ai-app-choice .seg-btn", { hasText: "Claude 桌面版" }).click();
 });
 
 await step("a link the person refuses connects nothing", async () => {

@@ -113,7 +113,8 @@ Windows 上可以直接雙擊 `start.bat`。同步功能需要 HTTPS 或 localho
     Claude 桌面版會問要不要安裝；接著在 Claude 裡說「連接我的 Slate」，點它給的連結並按確定。之後直接在 Claude 裡說要做什麼，
     由開著的 Slate 分頁執行。兩邊用配對碼互相確認（連結裡就帶著，不用自己輸入），擴充功能不存資料、只接受本站的分頁；
     刪除時 Slate 會跳出視窗問你。只能在電腦上用。
-    Claude Code 或其他 MCP 用戶端改用單檔的 `slate-mcp.mjs`（`claude mcp add slate -- node slate-mcp.mjs`，再執行 `node slate-mcp.mjs pair` 取得連結）。
+    **Claude Code（VS Code／終端機）**不用裝桌面版：在同一頁選「Claude Code」，把畫面上那段話貼給 Claude Code，它會下載 `slate-mcp.mjs` 並執行
+    `node slate-mcp.mjs install`（把程式留一份在 `~/.slate`、替所有專案登記，並印出連接用的連結）。其他 MCP 用戶端把指令設成 `node slate-mcp.mjs` 即可。
     自己架站的話要設 `SLATE_URL` 和 `SLATE_ORIGINS`。
   - **本機模型**：自動尋找這台電腦上執行中的 Ollama 和 LM Studio，找到就列出已安裝的模型讓你點選，資料完全不離開電腦。
     程式有在跑但不允許網頁連線時，畫面會給出對應的設定步驟（Ollama 是一行可以複製的設定，LM Studio 是介面上的開關）。

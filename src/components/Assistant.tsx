@@ -22,6 +22,7 @@ import {
   withService,
 } from "../lib/ai/assistant";
 import { bridgeCode, bridgeEnabled, setBridgeCode, setBridgeEnabled, useBridge, validCode } from "../lib/ai/bridge";
+import { useLocalState } from "../ui";
 
 type Item =
   | { kind: "user"; text: string }
@@ -43,21 +44,57 @@ async function connect(settings: AiSettings): Promise<Assistant> {
     : (await import("../lib/ai/local")).createLocal(settings, tools);
 }
 
+/** A block of text with a button that copies it. */
+function Copyable({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="ai-copy">
+      <pre>{text}</pre>
+      <button
+        type="button"
+        className="btn"
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(text);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2500);
+          } catch {
+            prompt("請複製：", text);
+          }
+        }}
+      >
+        {copied ? "已複製" : label}
+      </button>
+    </div>
+  );
+}
+
 /**
- * Using a Claude plan instead of a key. Two steps and no typing: install the extension in
- * Claude Desktop (a file to double-click), then follow the link Claude hands over, which
- * pairs this browser with it. The manual route stays available under "advanced".
+ * Using a Claude plan instead of a key. Two ways in, neither needing anything typed by hand:
+ * Claude Desktop installs an extension file, and Claude Code is told in one pasted message to
+ * set itself up. Either way, Claude then hands over a link that pairs this browser with it.
  */
 function SubscriptionSetup() {
   const state = useBridge();
   const [on, setOn] = useState(bridgeEnabled);
   const [code, setCode] = useState(bridgeCode);
+  const [app, setApp] = useLocalState<"desktop" | "code">("ai-plan-app", "desktop");
   const connected = state === "connected";
+  const site = location.origin + location.pathname.replace(/[^/]*$/, "");
+  const file = site + "slate-mcp.mjs";
+  // what the person pastes into Claude Code: it downloads the bridge and lets it register itself
+  const ask = `請幫我把 Slate 接上 Claude Code，依序做這三件事：
+1. 把 ${file} 下載到暫存資料夾。
+2. 用 node 執行它，並加上參數 install（例如：node slate-mcp.mjs install）。
+3. 把它印出來的內容原樣告訴我，包含裡面的連結。`;
+  const command = /Windows/.test(navigator.userAgent)
+    ? `curl.exe -fsSL ${file} -o "$env:TEMP\\slate-mcp.mjs"; node "$env:TEMP\\slate-mcp.mjs" install`
+    : `curl -fsSL ${file} -o /tmp/slate-mcp.mjs && node /tmp/slate-mcp.mjs install`;
+
   return (
     <div className="ai-mcp">
       <p className="muted small">
-        不用 API 金鑰：讓這台電腦上的 <b>Claude 桌面版</b>直接在你的 Slate 裡做事，用的是你原本的方案（Pro／Max 等）。對話在 Claude 那邊進行，Slate
-        要開著。只能在電腦上使用。
+        不用 API 金鑰：讓這台電腦上的 Claude 直接在你的 Slate 裡做事，用的是你原本的方案（Pro／Max 等）。對話在 Claude 那邊進行，Slate 要開著。只能在電腦上使用。
       </p>
 
       {connected ? (
@@ -65,43 +102,76 @@ function SubscriptionSetup() {
           已經連上 Claude 了。在 Claude 裡直接說想做的事，例如「看看我 Slate 今天的任務」。
         </p>
       ) : (
-        <ol className="ai-steps">
-          <li>
-            <b>先確認電腦上有 Claude 桌面版</b>
-            <span>
-              沒有的話到{" "}
-              <a href="https://claude.ai/download" target="_blank" rel="noreferrer">
-                claude.ai/download
-              </a>{" "}
-              安裝並登入。
-            </span>
-            <span className="muted small">要的是獨立的「Claude」應用程式；瀏覽器裡的 claude.ai 和 VS Code 裡的 Claude Code 都不算。</span>
-          </li>
-          <li>
-            <b>把 Slate 裝進 Claude</b>
-            <a className="btn primary" href="slate.mcpb" download>
-              <Download size={15} /> 下載 Claude 擴充功能
-            </a>
-            <span className="muted small">下載後點兩下那個檔案，Claude 桌面版會問你要不要安裝，按「安裝」。</span>
-            <details className="ai-help">
-              <summary>點兩下沒有反應？</summary>
-              <p>
-                通常是電腦上還沒有 Claude 桌面版（見上一步），或是它裝好後還沒開過。裝好並開啟一次之後再點兩下。
-              </p>
-              <p>
-                還是不行的話，從 Claude 裡面裝：打開 Claude 桌面版 → 設定（Settings）→ Extensions → Advanced settings → Install Extension…，選剛才下載的{" "}
-                <code className="inline">slate.mcpb</code>。
-              </p>
-            </details>
-          </li>
-          <li>
-            <b>連接</b>
-            <span>
-              在 Claude 裡說：<q>連接我的 Slate</q>，然後點它給你的連結。
-            </span>
-            <span className="muted small">連結會打開 Slate 並問你一次是否允許。請用你平常開 Slate 的這個瀏覽器打開它。</span>
-          </li>
-        </ol>
+        <>
+          <div className="seg ai-app-choice" role="group" aria-label="你用的是哪一種 Claude">
+            <button type="button" className={"seg-btn" + (app === "desktop" ? " active" : "")} onClick={() => setApp("desktop")}>
+              Claude 桌面版
+            </button>
+            <button type="button" className={"seg-btn" + (app === "code" ? " active" : "")} onClick={() => setApp("code")}>
+              Claude Code（VS Code／終端機）
+            </button>
+          </div>
+
+          {app === "desktop" ? (
+            <ol className="ai-steps">
+              <li>
+                <b>先確認電腦上有 Claude 桌面版</b>
+                <span>
+                  沒有的話到{" "}
+                  <a href="https://claude.ai/download" target="_blank" rel="noreferrer">
+                    claude.ai/download
+                  </a>{" "}
+                  安裝並登入。
+                </span>
+                <span className="muted small">要的是獨立的「Claude」應用程式。你用的如果是 VS Code 裡的 Claude Code，請改選上面的另一個選項，不用另外裝東西。</span>
+              </li>
+              <li>
+                <b>把 Slate 裝進 Claude</b>
+                <a className="btn primary" href="slate.mcpb" download>
+                  <Download size={15} /> 下載 Claude 擴充功能
+                </a>
+                <span className="muted small">下載後點兩下那個檔案，Claude 桌面版會問你要不要安裝，按「安裝」。</span>
+                <details className="ai-help">
+                  <summary>點兩下沒有反應？</summary>
+                  <p>通常是電腦上還沒有 Claude 桌面版（見上一步），或是它裝好後還沒開過。裝好並開啟一次之後再點兩下。</p>
+                  <p>
+                    還是不行的話，從 Claude 裡面裝：打開 Claude 桌面版 → 設定（Settings）→ Extensions → Advanced settings → Install Extension…，選剛才下載的{" "}
+                    <code className="inline">slate.mcpb</code>。
+                  </p>
+                </details>
+              </li>
+              <li>
+                <b>連接</b>
+                <span>
+                  在 Claude 裡說：<q>連接我的 Slate</q>，然後點它給你的連結。
+                </span>
+                <span className="muted small">連結會打開 Slate 並問你一次是否允許。請用你平常開 Slate 的這個瀏覽器打開它。</span>
+              </li>
+            </ol>
+          ) : (
+            <ol className="ai-steps">
+              <li>
+                <b>把這段話貼給 Claude Code</b>
+                <span className="muted small">它會自己下載並登記，不用另外安裝任何東西。過程中它會問你能不能執行指令，請允許。</span>
+                <Copyable text={ask} label="複製這段話" />
+              </li>
+              <li>
+                <b>重新載入，然後連接</b>
+                <span>
+                  照它說的重新啟動 Claude Code（VS Code 是「重新載入視窗」），再說：<q>連接我的 Slate</q>，點它給你的連結。
+                </span>
+                <span className="muted small">連結會打開 Slate 並問你一次是否允許。上一步印出來的連結也可以直接點。</span>
+              </li>
+              <li className="ai-step-plain">
+                <details className="ai-help">
+                  <summary>想自己在終端機做？</summary>
+                  <p>貼上這一行就好：</p>
+                  <Copyable text={command} label="複製指令" />
+                </details>
+              </li>
+            </ol>
+          )}
+        </>
       )}
 
       {on && !connected && (
@@ -110,7 +180,7 @@ function SubscriptionSetup() {
             ? validCode(code)
               ? "配對不符：請在 Claude 裡再說一次「連接我的 Slate」，點新的連結。"
               : "還沒配對：請在 Claude 裡說「連接我的 Slate」，點它給的連結。"
-            : "正在等 Claude：請確認 Claude 桌面版開著，而且擴充功能已經安裝。瀏覽器問是否允許連線到這台裝置時，請按允許。"}
+            : "正在等 Claude：請確認 Claude 開著，而且已經照上面的步驟裝好。瀏覽器問是否允許連線到這台裝置時，請按允許。"}
         </p>
       )}
 
@@ -128,15 +198,14 @@ function SubscriptionSetup() {
       )}
 
       <details className="ai-advanced">
-        <summary>進階：Claude Code 或手動設定</summary>
+        <summary>進階：其他支援 MCP 的程式，或手動配對</summary>
         <p className="muted small">
-          Claude Code 或其他支援 MCP 的程式：下載{" "}
+          任何支援 MCP 的程式都能用同一個橋接程式：下載{" "}
           <a href="slate-mcp.mjs" download>
             slate-mcp.mjs
           </a>
-          （需要 Node.js 18 以上），然後執行：
+          （需要 Node.js 18 以上），在該程式的 MCP 設定裡把指令設成 <code className="inline">node 下載的路徑/slate-mcp.mjs</code>。
         </p>
-        <code>claude mcp add slate -- node 下載的路徑/slate-mcp.mjs</code>
         <label>
           配對碼（執行 <code className="inline">node slate-mcp.mjs pair</code> 取得）
           <input
@@ -165,7 +234,7 @@ function SubscriptionSetup() {
       </details>
 
       <p className="muted small">
-        擴充功能不儲存任何資料，只和這個網站上配對過的 Slate 溝通；Slate 也只執行有配對簽章的指令。Claude 要刪除東西時，Slate 會先跳出視窗問你。 Claude
+        橋接程式不儲存任何資料，只和這個網站上配對過的 Slate 溝通；Slate 也只執行有配對簽章的指令。Claude 要刪除東西時，Slate 會先跳出視窗問你。 Claude
         讀到的頁面內容會送給 Anthropic 處理。
       </p>
     </div>
