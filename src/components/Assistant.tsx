@@ -152,7 +152,9 @@ function SubscriptionSetup() {
             <ol className="ai-steps">
               <li>
                 <b>把這段話貼給 Claude Code</b>
-                <span className="muted small">它會自己下載並登記，不用另外安裝任何東西。過程中它會問你能不能執行指令，請允許。</span>
+                <span className="muted small">
+                  它會自己下載並登記，不用另外安裝任何東西。過程中它會問你能不能執行指令，請允許。如果它說這個動作被擋下（開著自動模式時會這樣），改用下面「想自己在終端機做？」的那一行。
+                </span>
                 <Copyable text={ask} label="複製這段話" />
               </li>
               <li>
