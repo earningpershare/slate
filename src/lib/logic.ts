@@ -394,11 +394,38 @@ export function parseCsv(text: string): string[][] {
 }
 
 /** Guess a property type for a CSV column from its values. */
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+
+/**
+ * A calendar day out of text, as YYYY-MM-DD, or null. Understands 2026-01-02 and 2026/1/2,
+ * 2026年1月2日, and the way Notion writes dates ("October 13, 2024", "October 13, 2024 3:16 PM").
+ * A range ("June 24, 2025 → June 26, 2025") gives its first day.
+ */
+export function parseDay(value: string): string | null {
+  const v = value.trim().split(/\s*→\s*/)[0];
+  const day = (y: string, m: number, d: string) => {
+    const n = Number(d);
+    return m >= 1 && m <= 12 && n >= 1 && n <= 31 ? `${y}-${String(m).padStart(2, "0")}-${String(n).padStart(2, "0")}` : null;
+  };
+  let m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T\s].*)?$/.exec(v);
+  if (m) return day(m[1], Number(m[2]), m[3]);
+  m = /^(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/.exec(v);
+  if (m) return day(m[1], Number(m[2]), m[3]);
+  m = /^([A-Za-z]{3,9})\.? (\d{1,2}), (\d{4})(?:\s.*)?$/.exec(v);
+  if (m) {
+    const word = m[1].toLowerCase();
+    // the whole name, or its usual short form ("Sep", "Sept")
+    const month = MONTHS.findIndex((name) => name === word || name.slice(0, 3) === word || (word === "sept" && name === "september"));
+    return month >= 0 ? day(m[3], month + 1, m[2]) : null;
+  }
+  return null;
+}
+
 export function guessType(values: string[]): "number" | "date" | "checkbox" | "url" | "select" | "text" {
   const filled = values.map((v) => v.trim()).filter(Boolean);
   if (filled.length === 0) return "text";
   if (filled.every((v) => /^-?\d+(\.\d+)?$/.test(v))) return "number";
-  if (filled.every((v) => /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(v))) return "date";
+  if (filled.every((v) => parseDay(v))) return "date";
   if (filled.every((v) => /^(true|false|yes|no|✓|是|否)$/i.test(v))) return "checkbox";
   if (filled.every((v) => /^https?:\/\//i.test(v))) return "url";
   const distinct = new Set(filled);

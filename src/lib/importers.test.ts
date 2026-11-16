@@ -1,7 +1,7 @@
 import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "../db";
-import { importFile, importNotion, importTickTick, unzip, withPageLinks, type ZipEntry } from "./importers";
+import { importFile, importNotion, importTickTick, namesFirst, unzip, withPageLinks, type ZipEntry } from "./importers";
 
 const enc = new TextEncoder();
 const bytes = (s: string) => enc.encode(s);
@@ -269,6 +269,64 @@ describe("Notion export, current layout", () => {
     expect(textOf(trip.content)).toContain(`idb://${file.id}`);
     expect(textOf(trip.content)).toContain(`#/p/${one("行李").id}`);
     expect(JSON.stringify(pages)).not.toContain("data:image/gif"); // the stand-in used while parsing is gone
+  });
+
+  it("finds the column that names the rows, wherever Notion put it, and reads Notion's dates", async () => {
+    const files: Record<string, string> = {
+      // the names are in the third column here; the first one is a status every row shares
+      [`${P}美食 ${HEX("7")}_all.csv`]: "狀態,日期,餐廳,完成\n想去,\"October 13, 2024\",德記燒臘,Yes\n想去,\"June 24, 2025 → June 26, 2025\",正旺燒雞,No\n",
+      [`${P}美食/德記燒臘 ${HEX("8")}.md`]: "# 德記燒臘\n\n狀態: 想去\n日期: October 13, 2024\n\n必點叉燒\n",
+      [`${P}美食/正旺燒雞 ${HEX("9")}.md`]: "# 正旺燒雞\n\n",
+    };
+    await importNotion(entries(files), toBlocks);
+    const pages = await db.pages.toArray();
+    const table = pages.find((p) => p.title === "美食")!;
+    const rows = pages.filter((p) => p.parentId === table.id).map((p) => p.title).sort();
+    expect(rows).toEqual(["德記燒臘", "正旺燒雞"]); // not "想去" twice
+    const col = (name: string) => table.schema!.find((p) => p.name === name)!;
+    expect(table.schema!.map((p) => [p.name, p.type])).toEqual([
+      ["狀態", "text"],
+      ["日期", "date"],
+      ["完成", "checkbox"],
+    ]);
+    const shop = pages.find((p) => p.title === "德記燒臘")!;
+    expect(shop.props![col("日期").id]).toBe("2024-10-13");
+    expect(shop.props![col("完成").id]).toBe(true);
+    expect(pages.find((p) => p.title === "正旺燒雞")!.props![col("日期").id]).toBe("2025-06-24");
+    expect(textOf(shop.content)).toContain("必點叉燒"); // the row and its page file are still one
+    expect(textOf(shop.content)).not.toContain("狀態: 想去");
+  });
+
+  it("rows without a name are matched to their own page by what the page says about them", async () => {
+    // a habit tracker: no row has a name, every page file is "Untitled", only the date tells them apart
+    const files: Record<string, string> = {
+      [`${P}習慣 ${HEX("a")}_all.csv`]: "name,日期,運動\n,\"October 14, 2024\",Yes\n,\"October 15, 2024\",No\n,\"October 16, 2024\",Yes\n",
+      // deliberately not in the table's order
+      [`${P}習慣/Untitled ${HEX("3")}.md`]: "# Untitled\n\n日期: October 16, 2024\n運動: Yes\n\n第三天的心得\n",
+      [`${P}習慣/Untitled ${HEX("1")}.md`]: "# Untitled\n\n日期: October 14, 2024\n運動: Yes\n\n第一天的心得\n",
+      [`${P}習慣/Untitled ${HEX("2")}.md`]: "# Untitled\n\n日期: October 15, 2024\n運動: No\n",
+    };
+    const r = await importNotion(entries(files), toBlocks);
+    expect(r.rows).toBe(3); // three rows, not three rows plus three stray "Untitled" pages
+    const pages = await db.pages.toArray();
+    const table = pages.find((p) => p.kind === "database")!;
+    const rows = pages.filter((p) => p.parentId === table.id);
+    expect(rows).toHaveLength(3);
+    const day = table.schema!.find((p) => p.name === "日期")!.id;
+    const says = (date: string) => textOf(rows.find((x) => x.props![day] === date)!.content ?? []);
+    expect(says("2024-10-14")).toContain("第一天的心得");
+    expect(says("2024-10-16")).toContain("第三天的心得");
+    expect(says("2024-10-15")).not.toContain("心得");
+    expect(JSON.stringify(rows)).not.toContain("日期: October"); // and the repeated columns are gone from the pages
+  });
+
+  it("namesFirst leaves a table alone unless it has reason to move a column", () => {
+    const csv = "Name,Tags\n甲,x\n乙,y\n";
+    expect(namesFirst(csv, ["甲", "乙"])).toBe(csv);
+    expect(namesFirst(csv, [])).toBe(csv);
+    const unnamed = "name,日期\n,2024-10-14\n,2024-10-15\n";
+    expect(namesFirst(unnamed, ["Untitled", "Untitled"])).toBe(unnamed); // rows that have no names keep having none
+    expect(namesFirst("狀態,餐廳\n想去,\"a, b\"\n", ["a, b"])).toBe('餐廳,狀態\n"a, b",想去'); // cells are quoted again as needed
   });
 
   it("takes everything back out when it fails part-way", async () => {

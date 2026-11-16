@@ -107,7 +107,7 @@ describe("document helpers", () => {
   });
 });
 
-import { guessType, parseCsv, quadrant } from "./logic";
+import { guessType, parseCsv, parseDay, quadrant } from "./logic";
 
 describe("rollup", () => {
   const orders: Property[] = [
@@ -149,6 +149,18 @@ describe("parseCsv", () => {
   it("guesses column types", () => {
     expect(guessType(["1", "2.5", ""])).toBe("number");
     expect(guessType(["2026-01-02", "2026/3/4"])).toBe("date");
+    expect(guessType(["October 13, 2024", "June 24, 2025 3:16 PM", ""])).toBe("date"); // as Notion writes them
+    expect(guessType(["October 13, 2024", "soon"])).toBe("text");
+    expect(parseDay("October 13, 2024")).toBe("2024-10-13");
+    expect(parseDay("January 16, 2025 4:58 PM")).toBe("2025-01-16");
+    expect(parseDay("June 24, 2025 → June 26, 2025")).toBe("2025-06-24");
+    expect(parseDay("Sep 5, 2024")).toBe("2024-09-05");
+    expect(parseDay("2026/3/4")).toBe("2026-03-04");
+    expect(parseDay("2026-03-04T10:00:00Z")).toBe("2026-03-04");
+    expect(parseDay("2024年10月13日")).toBe("2024-10-13");
+    expect(parseDay("Octember 13, 2024")).toBe(null);
+    expect(parseDay("March 40, 2024")).toBe(null);
+    expect(parseDay("12 apples")).toBe(null);
     expect(guessType(["https://a.tw"])).toBe("url");
     expect(guessType(["進行中", "完成", "進行中", "完成", "進行中", "完成"])).toBe("select");
     expect(guessType(["甲", "乙", "丙"])).toBe("text");

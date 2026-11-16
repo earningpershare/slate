@@ -4,7 +4,7 @@
 // Both add to what is already here; nothing is replaced.
 import { createDatabase, createPage, db, importCsv, saveFile, updatePage } from "../db";
 import type { Repeat, Task } from "../types";
-import { parseCsv, uid } from "./logic";
+import { csvCell, parseCsv, uid } from "./logic";
 
 export class ImportError extends Error {}
 
@@ -249,6 +249,25 @@ export interface NotionResult {
 /** A one-pixel picture that loads from nowhere: what stored pictures are called while Markdown is being parsed. */
 const STAND_IN = "data:image/gif;base64,R0lGODlhAQABAAAAACwAAAAAAQABAAA=";
 
+/**
+ * Notion does not always put the column with the rows' names first, and the names are what
+ * the table is read by. Every row also has a page file named after it, so the column whose
+ * values match those file names is the one; it is moved to the front. With nothing to go by
+ * (a table whose rows have no names at all), the table is left exactly as it is.
+ */
+export function namesFirst(csv: string, rowTitles: string[]): string {
+  const table = parseCsv(csv);
+  if (table.length < 2 || table[0].length < 2) return csv;
+  const [head, ...rows] = table;
+  const cut = (s: string) => s.trim().slice(0, 40);
+  const titles = new Set(rowTitles.map(cut).filter(Boolean));
+  const score = head.map((_, c) => rows.filter((r) => (r[c] ?? "").trim() && titles.has(cut(r[c]))).length);
+  const best = score.indexOf(Math.max(...score));
+  if (best === 0 || score[best] === 0 || score[best] === score[0]) return csv;
+  const front = (r: string[]) => [r[best] ?? "", ...r.filter((_, c) => c !== best)];
+  return [head, ...rows].map((r) => front(r).map(csvCell).join(",")).join("\n");
+}
+
 /** One Notion page or database, pieced together from the files that describe it. */
 interface NotionDoc {
   /** folder it sits in, and that folder + its file name without extension */
@@ -353,6 +372,26 @@ export async function importNotion(
   const children = new Map<NotionDoc | null, NotionDoc[]>();
   for (const [d, p] of parents) children.set(p, [...(children.get(p) ?? []), d]);
 
+  /**
+   * The "Column: value" lines a row's page starts with, as column number -> value, and how many
+   * lines they take up (leading blank lines included).
+   */
+  const leadingLines = (body: string, head: string[]) => {
+    const lines = body.split(/\r?\n/);
+    const values = new Map<number, string>();
+    let at = 0;
+    while (at < lines.length && !lines[at].trim()) at++;
+    const first = at;
+    for (; at < lines.length; at++) {
+      const m = /^([^:\n]{1,80}):\s?(.*)$/.exec(lines[at]);
+      const col = m ? head.findIndex((h, c) => c > 0 && h.trim() === m[1].trim()) : -1;
+      if (col < 0) break;
+      values.set(col, m![2].trim());
+    }
+    return { values, end: at > first ? at : 0, lines };
+  };
+  const leadingValues = (body: string, head: string[]) => leadingLines(body, head).values;
+
   /** A page's Markdown split into its title line and the rest. */
   const split = (path: string) => {
     const md = read(path);
@@ -406,20 +445,38 @@ export async function importNotion(
       if (d.csv) {
         await createPage(parent?.pageId ?? result.root, { id: d.pageId, kind: "database", title: d.title, schema: [], views: [{ id: uid(), name: "表格", type: "table", filters: [], sorts: [] }] });
         made.push(d.pageId);
-        result.rows += await importCsv(d.pageId, read(d.csv));
+        const rowPages = (children.get(d) ?? []).filter((k) => !k.csv);
+        const csv = namesFirst(read(d.csv), rowPages.map((k) => k.title));
+        result.rows += await importCsv(d.pageId, csv);
         result.databases++;
-        const database = await db.pages.get(d.pageId);
-        columns.set(d, (database?.schema ?? []).map((p) => p.name));
-        // each row with a body has its own page file in the database's folder: pair them up by title
-        const rows = await db.pages.where("parentId").equals(d.pageId).toArray();
+        const [head = [], ...lines] = parseCsv(csv);
+        columns.set(d, head.slice(1).map((h) => h.trim()));
+        // Each row has a page file of its own in the database's folder. Pair them up: by name, and,
+        // because many rows share a name or have none, by the column values the page file repeats
+        // at its top ("Status: Done"). An unnamed page is "Untitled" as a file and empty in the table.
+        const rows = (await db.pages.where("parentId").equals(d.pageId).toArray()).sort((a, b) => a.sort - b.sort);
         made.push(...rows.map((r) => r.id));
-        const free = new Map<string, string[]>();
-        for (const r of rows) free.set(r.title, [...(free.get(r.title) ?? []), r.id]);
-        for (const kid of children.get(d) ?? []) {
-          if (kid.csv) continue;
-          const rowId = free.get(kid.title)?.shift() ?? [...free.entries()].find(([t, ids]) => ids.length && kid.title && t.startsWith(kid.title))?.[1].shift();
-          if (rowId) kid.pageId = rowId; // the page of that row; otherwise it is created below as one more row
-          else free.delete(kid.title);
+        const inStep = rows.length === lines.length; // the table's lines and the rows made from them, in the same order
+        const named = (t: string) => (/^untitled$/i.test(t.trim()) ? "" : t.trim());
+        const taken = new Set<number>();
+        for (const kid of rowPages) {
+          const want = named(kid.title);
+          const said = kid.md ? leadingValues(split(kid.md).body, head) : new Map<number, string>();
+          let best = -1;
+          let bestScore = 0;
+          rows.forEach((r, n) => {
+            if (taken.has(n)) return;
+            const has = named(r.title);
+            // the file name may be a shortened form of the row's name; otherwise they must agree
+            if (has !== want && !(want && has.startsWith(want))) return;
+            let score = want ? 4 : 1;
+            if (inStep) for (const [col, value] of said) if ((lines[n][col] ?? "").trim() === value) score++;
+            if (score > bestScore) [best, bestScore] = [n, score];
+          });
+          if (best >= 0) {
+            taken.add(best);
+            kid.pageId = rows[best].id; // the page of that row; a page with no row is created below as one more row
+          }
         }
       } else if (!made.includes(d.pageId)) {
         await createPage(parent?.pageId ?? result.root, { id: d.pageId, title: d.title, ...(parent?.csv ? { isRow: true } : {}) });
@@ -437,18 +494,8 @@ export async function importNotion(
         const parent = parents.get(d);
         if (parent?.csv) {
           // a row's page starts by repeating its columns ("Status: Done"); the table already has those
-          const names = new Set(columns.get(parent) ?? []);
-          const lines = body.split(/\r?\n/);
-          let at = 0;
-          while (at < lines.length && !lines[at].trim()) at++;
-          let dropped = 0;
-          while (at < lines.length) {
-            const m = /^([^:\n]{1,80}):\s?.*$/.exec(lines[at]);
-            if (!m || !names.has(m[1].trim())) break;
-            at++;
-            dropped++;
-          }
-          if (dropped) body = lines.slice(at).join("\n");
+          const { end, lines } = leadingLines(body, ["", ...(columns.get(parent) ?? [])]);
+          if (end) body = lines.slice(end).join("\n");
         }
         const dir = dirOf(d.md);
         for (const [whole, bang, label, href] of [...body.matchAll(/(!?)\[([^\]]*)\]\(([^)\s]+)\)/g)]) {

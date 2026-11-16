@@ -15,6 +15,7 @@ import type {
 import {
   blocksToText,
   guessType,
+  parseDay,
   linkedPageIds,
   nextDue,
   parseCsv,
@@ -423,8 +424,8 @@ export async function importCsv(dbId: string, text: string): Promise<number> {
           props[prop.id] = /^(true|yes|✓|是)$/i.test(v);
           break;
         case "date": {
-          const m = v.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-          if (m) props[prop.id] = `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+          const day = parseDay(v);
+          if (day) props[prop.id] = day;
           break;
         }
         case "select":
