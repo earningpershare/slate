@@ -1,7 +1,7 @@
 // What an AI model can do in a Slate workspace. This layer knows nothing about any model
 // or provider: each tool is a name, a description, a JSON Schema and a function. The
 // in-app assistant (lib/ai/claude.ts, lib/ai/local.ts) and the MCP server share it.
-import { addTask, createDatabase, createPage, db, deleteTask, mutatePage, OPTION_COLORS, trashPage, updatePage } from "../../db";
+import { addTask, createDatabase, createPage, db, deleteTask, movePage, mutatePage, OPTION_COLORS, trashPage, updatePage } from "../../db";
 import type { Page, Property, PropValue, Repeat, Task } from "../../types";
 import { blocksToText, uid } from "../logic";
 
@@ -336,8 +336,8 @@ export function slateTools(host: ToolHost): Tool[] {
     {
       name: "read_page",
       description:
-        "Read one page: its title and content as Markdown. For a database it returns the columns (with their types and select options) and the rows; for a row, its column values and its own content.",
-      schema: obj({ id: { type: "string" } }, ["id"]),
+        "Read one page: its title and content as Markdown. For a database it returns the columns (with their types and select options) and up to 200 rows at a time (rows_from continues); for a row, its column values and its own content.",
+      schema: obj({ id: { type: "string" }, rows_from: { type: "integer", description: "For a database with more than 200 rows: the number of the first row to return (0 is the first)" } }, ["id"]),
       describe: () => "讀取頁面",
       async run(i) {
         const p = await page(i.id);
@@ -345,13 +345,14 @@ export function slateTools(host: ToolHost): Tool[] {
         if (p.kind === "database") {
           const schema = p.schema ?? [];
           const rows = (await db.pages.where("parentId").equals(p.id).toArray()).filter((r) => alive(r) && r.isRow).sort((a, b) => a.sort - b.sort);
+          const from = Math.max(0, Math.floor(Number(i.rows_from) || 0));
           return {
             id: p.id,
             kind: "database",
             title: p.title,
             columns: schema.map((c) => ({ name: c.name, type: c.type, ...(c.options?.length ? { options: c.options.map((o) => o.name) } : {}) })),
-            rows: rows.slice(0, 200).map((r) => rowOut(r, schema)),
-            ...(rows.length > 200 ? { note: `${rows.length} rows in total; only the first 200 are shown` } : {}),
+            rows: rows.slice(from, from + 200).map((r) => rowOut(r, schema)),
+            ...(rows.length > from + 200 ? { note: `${rows.length} rows in total; these are ${from}-${from + 199}. Call again with rows_from: ${from + 200} for more.` } : {}),
           };
         }
         if (p.isRow) {
@@ -409,6 +410,26 @@ export function slateTools(host: ToolHost): Tool[] {
         if (Object.keys(patch).length) await updatePage(p.id, patch);
         if (i.markdown !== undefined) await setContent(p.id, String(i.markdown), i.mode === "append");
         return { id: p.id, title: patch.title ?? p.title, updated: true };
+      },
+    },
+    {
+      name: "move_page",
+      description:
+        "Move a page, with everything under it, to sit under another page or at the top level. Use it to reorganise a workspace. A database row moved out of its database becomes an ordinary page. To put something into a database, use add_row instead.",
+      schema: obj({ id: { type: "string" }, parent_id: { type: "string", description: 'Id of the page to move it under. Leave out (or "") for the top level.' } }, ["id"]),
+      async describe(i) {
+        const p = await db.pages.get(str(i.id));
+        const to = str(i.parent_id) ? await db.pages.get(str(i.parent_id)) : null;
+        return `把「${plain(p?.title)}」搬到${to ? `「${plain(to.title)}」底下` : "最上層"}`;
+      },
+      async run(i) {
+        const p = unlocked(await page(i.id));
+        const to = str(i.parent_id) ? unlocked(await page(i.parent_id)) : null;
+        if (to?.kind === "database") throw new ToolError("A page cannot be moved into a database. Use add_row to add a row to it.");
+        if (to && (to.id === p.id || (await descendantsOf(p.id)).some((d) => d.id === to.id))) throw new ToolError("A page cannot be moved into itself or into something under it.");
+        if ((p.parentId || "") === (to?.id ?? "") && !p.isRow) return { id: p.id, title: p.title, moved: false, note: "It is already there." };
+        await movePage(p.id, to?.id ?? null);
+        return { id: p.id, title: p.title, moved: true, parent: to ? to.title : "(top level)" };
       },
     },
     {

@@ -37,6 +37,7 @@ const manifest = {
   },
   tools: [
     { name: "slate_connect", description: "Give the link that connects Slate in the browser to Claude on this computer." },
+    { name: "import_file", description: "Import a Notion export (.zip) or a TickTick backup (.csv) from this computer into Slate." },
     ...tools.map((t) => ({ name: t.name, description: t.description.split(". ")[0].replace(/\.$/, "") + "." })),
   ],
   keywords: ["notes", "tasks", "database", "productivity"],

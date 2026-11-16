@@ -197,6 +197,101 @@ describe("Notion export", () => {
   });
 });
 
+// How Notion lays an export out since 2025: ids on the files, not on the folders; namesakes told
+// apart by the start of the id; attachments in a folder of their own; a workspace section on top.
+const HEX = (c: string) => c.repeat(32).slice(0, 32);
+const P = "Export-0000/Private & Shared/";
+const current = (): Record<string, string | Uint8Array> => ({
+  [`${P}旅行 ${HEX("a")}.md`]: `# 旅行\n\n[行李](${encodeURIComponent("旅行")}/${encodeURIComponent(`行李 ${HEX("b")}`)}.md)\n\n![地圖](../attachments/11111111-2222/map.png)\n`,
+  [`${P}旅行/行李 ${HEX("b")}.md`]: "# 行李\n\n護照\n",
+  // a database: its table, a page file of its own beside it, and its rows' pages in a folder named after it
+  [`${P}旅行/預算 ${HEX("c")}_all.csv`]: "\uFEFF項目,金額,已付\n機票,12000,Yes\n住宿,8000,No\n",
+  [`${P}旅行/預算 ${HEX("c")}.md`]: "# 預算\n\n",
+  [`${P}旅行/預算/機票 ${HEX("d")}.md`]: "# 機票\n\n金額: 12000\n已付: Yes\n\n訂位代號 ABC123\n",
+  // two unnamed databases side by side: the folders carry the start of each id
+  [`${P}旅行/Untitled Database ${"e1e1e1e1" + "0".repeat(24)}_all.csv`]: "Name\n甲\n",
+  [`${P}旅行/Untitled Database ${"e2e2e2e2" + "0".repeat(24)}_all.csv`]: "Name\n乙\n",
+  [`${P}旅行/Untitled e1e1-e1e1/甲 ${HEX("1")}.md`]: "# 甲\n\n甲的內文\n",
+  [`${P}旅行/Untitled e2e2-e2e2/乙 ${HEX("2")}.md`]: "# 乙\n\n乙的內文\n",
+  // the file name cuts a long title short; the heading has all of it
+  [`${P}很長的標題在檔名裡被 ${HEX("3")}.md`]: "# 很長的標題在檔名裡被切掉了一半\n\n內容\n",
+  // left behind by Notion: no title, nothing in it, nothing under it
+  [`${P}Untitled ${HEX("4")}.md`]: "# Untitled\n\n",
+  // another section, with a folder that is only an id
+  [`Export-0000/Our plan/${HEX("5")}/留言 ${HEX("6")}.md`]: "# 留言\n\n記得訂位\n",
+  "Export-0000/attachments/11111111-2222/map.png": new Uint8Array([137, 80, 78, 71, 9]),
+});
+
+describe("Notion export, current layout", () => {
+  it("rebuilds the nesting from folders that carry no ids", async () => {
+    const r = await importNotion(entries(current()), toBlocks);
+    expect(r).toMatchObject({ pages: 4, databases: 3, rows: 4, files: 1, skipped: 1 });
+    const pages = await db.pages.toArray();
+    const by = (title: string) => pages.filter((p) => p.title === title);
+    const one = (title: string) => {
+      expect(by(title), title).toHaveLength(1);
+      return by(title)[0];
+    };
+    const root = one("從 Notion 匯入");
+    const trip = one("旅行");
+    expect(trip.parentId).toBe(root.id); // the section folder on top is not a page
+    expect(one("行李").parentId).toBe(trip.id);
+    expect(one("留言").parentId).toBe(root.id); // a folder that is only an id is skipped over
+    expect(one("很長的標題在檔名裡被切掉了一半").parentId).toBe(root.id);
+    expect(by("Untitled")).toHaveLength(0);
+
+    // the database and the page file beside it are one thing, under the right page
+    const budget = one("預算");
+    expect(budget).toMatchObject({ kind: "database", parentId: trip.id });
+    const ticket = one("機票"); // the row from the table and its page file are the same row
+    expect(ticket).toMatchObject({ parentId: budget.id, isRow: true });
+    expect(ticket.props![budget.schema!.find((p) => p.name === "金額")!.id]).toBe(12000);
+    const body = textOf(ticket.content);
+    expect(body).toContain("ABC123");
+    expect(body).not.toContain("金額: 12000"); // the columns repeated at the top of a row's page are dropped
+    expect(body).not.toContain("已付");
+    expect(one("住宿").parentId).toBe(budget.id);
+
+    // namesakes: each row's page went to its own table
+    const unnamed = by("Untitled Database");
+    expect(unnamed).toHaveLength(2);
+    for (const [row, inside] of [["甲", "甲的內文"], ["乙", "乙的內文"]]) {
+      const p = one(row);
+      expect(p.isRow).toBe(true);
+      expect(textOf(p.content)).toContain(inside);
+      const table = unnamed.find((d) => d.id === p.parentId)!;
+      expect((await db.pages.where("parentId").equals(table.id).toArray()).map((x) => x.title)).toEqual([row]);
+    }
+
+    // a picture kept in the separate attachments folder, and a link to a page in a subfolder
+    const file = (await db.files.toArray())[0];
+    expect(file).toMatchObject({ name: "map.png", type: "image/png" });
+    expect(textOf(trip.content)).toContain(`idb://${file.id}`);
+    expect(textOf(trip.content)).toContain(`#/p/${one("行李").id}`);
+    expect(JSON.stringify(pages)).not.toContain("data:image/gif"); // the stand-in used while parsing is gone
+  });
+
+  it("takes everything back out when it fails part-way", async () => {
+    await db.pages.add({ id: "mine", parentId: "", kind: "page", title: "原本就有的", sort: 1, createdAt: 1, updatedAt: 1 });
+    let calls = 0;
+    const failing = (md: string) => {
+      if (++calls === 3) throw new Error("parser blew up");
+      return toBlocks(md);
+    };
+    await expect(importNotion(entries(current()), failing)).rejects.toThrow("parser blew up");
+    expect((await db.pages.toArray()).map((p) => p.title)).toEqual(["原本就有的"]);
+    expect(await db.files.count()).toBe(0);
+  });
+
+  it("reports progress from start to finish", async () => {
+    const seen: number[] = [];
+    await importNotion(entries(current()), toBlocks, (done, total) => seen.push(done / total));
+    expect(seen.length).toBeGreaterThan(10);
+    expect(seen[seen.length - 1]).toBe(1);
+    expect([...seen].sort((a, b) => a - b)).toEqual(seen);
+  });
+});
+
 describe("links between imported pages", () => {
   const link = (id: string, text: string) => ({ type: "link", href: "#/p/" + id, content: [{ type: "text", text, styles: {} }] });
   const t = (text: string) => ({ type: "text", text, styles: {} });

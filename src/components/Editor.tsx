@@ -164,8 +164,10 @@ const dictionary = {
 
 /** Parse Markdown into document blocks (used by import; needs no mounted editor). */
 export function markdownToBlocks(md: string): unknown[] {
-  return BlockNoteEditor.create({ schema }).tryParseMarkdownToBlocks(md);
+  return (parser ??= BlockNoteEditor.create({ schema }) as AppEditor).tryParseMarkdownToBlocks(md);
 }
+// one headless editor for all conversions: an import parses thousands of pages
+let parser: AppEditor | undefined;
 
 /** Document blocks as Markdown (some formatting is lost; used when a model reads a page). */
 export function blocksToMarkdown(blocks: unknown[]): string | Promise<string> {

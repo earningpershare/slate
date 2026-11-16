@@ -240,37 +240,146 @@ export interface NotionResult {
   databases: number;
   rows: number;
   files: number;
+  /** untitled pages with nothing in them and nothing under them, left out */
+  skipped: number;
   /** id of the page everything was put under */
   root: string;
+}
+
+/** A one-pixel picture that loads from nowhere: what stored pictures are called while Markdown is being parsed. */
+const STAND_IN = "data:image/gif;base64,R0lGODlhAQABAAAAACwAAAAAAQABAAA=";
+
+/** One Notion page or database, pieced together from the files that describe it. */
+interface NotionDoc {
+  /** folder it sits in, and that folder + its file name without extension */
+  dir: string;
+  stem: string;
+  /** as in the file name (long titles are cut short there) */
+  title: string;
+  /** Notion's 32-character id, when the file name carries one */
+  nid: string;
+  md?: string;
+  csv?: string;
+  /** the page it becomes in this workspace */
+  pageId: string;
+  depth: number;
 }
 
 /**
  * Import a Notion export (Markdown & CSV). Pages keep their nesting, databases come in as
  * databases with their rows, pictures and attachments are stored, and links between
  * pages keep working. Everything lands under one new page so nothing gets mixed up.
+ * If anything fails, whatever was already brought in is taken out again.
+ *
+ * How an export is laid out (as of 2025): a page is "Title <32-hex id>.md"; a database is
+ * "Title <id>_all.csv" (sometimes with a ".md" of the same name beside it); what sits
+ * inside a page or database is in a FOLDER named after it, without the id ("Title"), or,
+ * when two neighbours share a title, with the start of the id ("Title 1b81-4f2a").
+ * Older exports put the id on the folder too. Attachments may sit in a folder of their own.
  */
 export async function importNotion(
   entries: ZipEntry[],
   toBlocks: (markdown: string) => unknown[] | Promise<unknown[]>,
+  onProgress?: (done: number, total: number) => void,
 ): Promise<NotionResult> {
   const text = new TextDecoder();
   const files = new Map(entries.map((e) => [e.name.replace(/\\/g, "/").replace(/^\/+/, ""), e.data]));
-  const mds = [...files.keys()].filter((p) => /\.md$/i.test(p));
-  // "X_all.csv" holds every row of a database; "X.csv" only what its default view showed
-  const csvs = [...files.keys()].filter((p) => /\.csv$/i.test(p));
-  const databases = csvs.filter((p) => /_all\.csv$/i.test(p) || !files.has(p.replace(/\.csv$/i, "_all.csv")));
-  if (mds.length + databases.length === 0) {
-    throw new ImportError("壓縮檔裡沒有 Notion 的頁面。請在 Notion 匯出時選「Markdown & CSV」。");
+  const read = (path: string) => text.decode(files.get(path)!).replace(/^﻿/, "");
+
+  // ---- 1. which files describe which page ----
+  const docs = new Map<string, NotionDoc>();
+  for (const path of files.keys()) {
+    const m = /^(.*?)(_all)?\.(md|csv)$/i.exec(path);
+    if (!m) continue;
+    const stem = m[1];
+    const name = baseOf(stem);
+    const id = /^(.*?)\s+([0-9a-f]{32})$/i.exec(name);
+    const doc = docs.get(stem) ?? { dir: dirOf(stem), stem, title: (id ? id[1] : name).trim(), nid: id ? id[2].toLowerCase() : "", pageId: uid(), depth: 0 };
+    if (m[3].toLowerCase() === "md") doc.md = path;
+    else if (m[2] || !doc.csv) doc.csv = path; // "_all" holds every row; the plain one only what a view showed
+    docs.set(stem, doc);
+  }
+  if (docs.size === 0) throw new ImportError("壓縮檔裡沒有 Notion 的頁面。請在 Notion 匯出時選「Markdown & CSV」。");
+
+  // ---- 2. which page a folder belongs to ----
+  const inDir = new Map<string, NotionDoc[]>();
+  for (const d of docs.values()) inDir.set(d.dir, [...(inDir.get(d.dir) ?? []), d]);
+  const folderDoc = new Map<string, NotionDoc | null>();
+  const docOfFolder = (folder: string): NotionDoc | null => {
+    if (folderDoc.has(folder)) return folderDoc.get(folder)!;
+    const around = inDir.get(dirOf(folder)) ?? [];
+    const name = baseOf(folder);
+    // older exports: the folder carries the full id, exactly like the file
+    let hit = docs.get(folder) ?? null;
+    if (!hit) {
+      const same = around.filter((d) => d.title === name);
+      // a database and its own ".md" share a stem, so they are one doc already; two docs here are true namesakes
+      hit = same.find((d) => d.csv) ?? same[0] ?? null;
+    }
+    if (!hit) {
+      // "Title 1b81-4f2a": the start of the id tells namesakes apart
+      const m = /^(.*?)\s+([0-9a-f]{4}(?:-[0-9a-f]{1,12})*)$/i.exec(name);
+      if (m) {
+        const prefix = m[2].replace(/-/g, "").toLowerCase();
+        const want = m[1].trim();
+        const byId = around.filter((d) => d.nid.startsWith(prefix));
+        hit = byId.find((d) => d.title === want) ?? byId.find((d) => d.title.startsWith(want)) ?? byId[0] ?? null;
+      }
+    }
+    if (!hit && name === "Untitled") {
+      // an unnamed database is "Untitled Database" as a file, but its folder is just "Untitled"
+      const unnamed = around.filter((d) => d.csv && /^Untitled/.test(d.title));
+      if (unnamed.length === 1) hit = unnamed[0];
+    }
+    folderDoc.set(folder, hit);
+    return hit;
+  };
+  /** The page a doc sits inside: the nearest folder above it that is a page. */
+  const parentOf = (doc: NotionDoc): NotionDoc | null => {
+    for (let dir = doc.dir; dir; dir = dirOf(dir)) {
+      const owner = docOfFolder(dir);
+      if (owner && owner !== doc) return owner;
+    }
+    return null;
+  };
+  const parents = new Map<NotionDoc, NotionDoc | null>();
+  for (const d of docs.values()) parents.set(d, parentOf(d));
+  const depthOf = (d: NotionDoc): number => {
+    let n = 0;
+    for (let p = parents.get(d); p && n < 64; p = parents.get(p)) n++;
+    return n;
+  };
+  for (const d of docs.values()) d.depth = depthOf(d);
+  const children = new Map<NotionDoc | null, NotionDoc[]>();
+  for (const [d, p] of parents) children.set(p, [...(children.get(p) ?? []), d]);
+
+  /** A page's Markdown split into its title line and the rest. */
+  const split = (path: string) => {
+    const md = read(path);
+    const h1 = /^\s*#\s+(.+?)\s*(?:\r?\n|$)/.exec(md);
+    return h1 ? { title: h1[1].trim(), body: md.slice(h1[0].length) } : { title: "", body: md };
+  };
+  // the file name cuts long titles short; the heading inside has the whole one
+  for (const d of docs.values()) {
+    if (!d.md || d.csv) continue;
+    const { title } = split(d.md);
+    if (title) d.title = title;
   }
 
-  // every page and database gets its id up front, so links between them can be rewritten
-  const stem = (p: string) => p.replace(/(_all)?\.(md|csv)$/i, "");
-  const idByStem = new Map<string, string>();
-  for (const p of [...mds, ...databases]) if (!idByStem.has(stem(p))) idByStem.set(stem(p), uid());
-  const dbStems = new Set(databases.map(stem));
+  // untitled, empty, and nothing inside: Notion leaves many of these behind
+  const isRowDoc = (d: NotionDoc) => !!parents.get(d)?.csv;
+  const blank = (d: NotionDoc) =>
+    !d.csv && !isRowDoc(d) && !(children.get(d)?.length) && /^(untitled)?$/i.test(d.title) && (!d.md || !split(d.md).body.trim());
 
-  const result: NotionResult = { pages: 0, databases: 0, rows: 0, files: 0, root: "" };
-  result.root = await createPage(null, { title: "從 Notion 匯入", icon: "📥" });
+  // ---- 3. create ----
+  const result: NotionResult = { pages: 0, databases: 0, rows: 0, files: 0, skipped: 0, root: "" };
+  const made: string[] = []; // every page created, to take back out if something fails
+  const madeFiles: string[] = [];
+  const todo = [...docs.values()].filter((d) => !blank(d)).sort((a, b) => a.depth - b.depth);
+  result.skipped = docs.size - todo.length;
+  const total = todo.length * 2;
+  let done = 0;
+  const tick = () => onProgress?.(++done, total);
 
   const saved = new Map<string, string>();
   const store = async (path: string): Promise<string | null> => {
@@ -282,86 +391,100 @@ export async function importNotion(
     const type = MIME[name.split(".").pop()?.toLowerCase() ?? ""] ?? "application/octet-stream";
     const url = await saveFile(new File([data as BlobPart], name, { type }));
     saved.set(path, url);
+    madeFiles.push(url.replace("idb://", ""));
     result.files++;
     return url;
   };
 
-  /** Markdown of one page -> { title, blocks }, with its pictures stored and its links rewritten. */
-  const read = async (path: string) => {
-    let md = text.decode(files.get(path)!).replace(/^﻿/, "");
-    let title = stripId(baseOf(path).replace(/\.md$/i, ""));
-    const h1 = md.match(/^\s*#\s+(.+)\r?\n?/);
-    if (h1) {
-      title = h1[1].trim();
-      md = md.slice(h1[0].length);
-    }
-    const dir = dirOf(path);
-    const links = [...md.matchAll(/(!?)\[([^\]]*)\]\(([^)\s]+)\)/g)];
-    for (const [whole, bang, label, href] of links) {
-      if (/^(https?:|mailto:|#|idb:)/i.test(href)) continue;
-      const target = resolvePath(dir, href);
-      const page = idByStem.get(stem(target));
-      let next: string | null = null;
-      if (!bang && page && /\.(md|csv)$/i.test(target)) next = `[${label}](#/p/${page})`;
-      else {
-        const url = await store(target);
-        if (url) next = `${bang}[${label}](${url})`;
+  try {
+    result.root = await createPage(null, { title: "從 Notion 匯入", icon: "📥" });
+    made.push(result.root);
+    const columns = new Map<NotionDoc, string[]>(); // a database's column names, to tidy its rows' pages
+
+    for (const d of todo) {
+      const parent = parents.get(d);
+      if (d.csv) {
+        await createPage(parent?.pageId ?? result.root, { id: d.pageId, kind: "database", title: d.title, schema: [], views: [{ id: uid(), name: "表格", type: "table", filters: [], sorts: [] }] });
+        made.push(d.pageId);
+        result.rows += await importCsv(d.pageId, read(d.csv));
+        result.databases++;
+        const database = await db.pages.get(d.pageId);
+        columns.set(d, (database?.schema ?? []).map((p) => p.name));
+        // each row with a body has its own page file in the database's folder: pair them up by title
+        const rows = await db.pages.where("parentId").equals(d.pageId).toArray();
+        made.push(...rows.map((r) => r.id));
+        const free = new Map<string, string[]>();
+        for (const r of rows) free.set(r.title, [...(free.get(r.title) ?? []), r.id]);
+        for (const kid of children.get(d) ?? []) {
+          if (kid.csv) continue;
+          const rowId = free.get(kid.title)?.shift() ?? [...free.entries()].find(([t, ids]) => ids.length && kid.title && t.startsWith(kid.title))?.[1].shift();
+          if (rowId) kid.pageId = rowId; // the page of that row; otherwise it is created below as one more row
+          else free.delete(kid.title);
+        }
+      } else if (!made.includes(d.pageId)) {
+        await createPage(parent?.pageId ?? result.root, { id: d.pageId, title: d.title, ...(parent?.csv ? { isRow: true } : {}) });
+        made.push(d.pageId);
+        if (parent?.csv) result.rows++;
+        else result.pages++;
       }
-      if (next) md = md.split(whole).join(next);
+      tick();
     }
-    return { title, content: withPageLinks(await toBlocks(md)) };
-  };
 
-  /** The page or database a path sits inside: the one named like its folder. */
-  const parentOf = (path: string): string | null => idByStem.get(dirOf(stem(path))) ?? null;
-  const depth = (p: string) => p.split("/").length;
-
-  // databases first (their rows are pages inside them), shallow before deep
-  const rowPages = new Map<string, string>(); // md path -> row id
-  for (const p of [...databases].sort((a, b) => depth(a) - depth(b))) {
-    const id = idByStem.get(stem(p))!;
-    const title = stripId(baseOf(stem(p)));
-    await createPage(null, { id, kind: "database", title, schema: [], views: [{ id: uid(), name: "表格", type: "table", filters: [], sorts: [] }] });
-    result.rows += await importCsv(id, text.decode(files.get(p)!));
-    result.databases++;
-    // a row with a body has its own .md in the folder named after the database
-    const rows = await db.pages.where("parentId").equals(id).toArray();
-    const free = new Map<string, string[]>();
-    for (const r of rows) free.set(r.title, [...(free.get(r.title) ?? []), r.id]);
-    for (const m of mds.filter((x) => dirOf(x) === stem(p))) {
-      const name = stripId(baseOf(m).replace(/\.md$/i, ""));
-      const rowId = free.get(name)?.shift();
-      if (rowId) {
-        rowPages.set(m, rowId);
-        idByStem.set(stem(m), rowId);
+    // ---- 4. fill in, now that every page has its id and links can point at it ----
+    for (const d of todo) {
+      if (d.md && !d.csv) {
+        let { body } = split(d.md);
+        const parent = parents.get(d);
+        if (parent?.csv) {
+          // a row's page starts by repeating its columns ("Status: Done"); the table already has those
+          const names = new Set(columns.get(parent) ?? []);
+          const lines = body.split(/\r?\n/);
+          let at = 0;
+          while (at < lines.length && !lines[at].trim()) at++;
+          let dropped = 0;
+          while (at < lines.length) {
+            const m = /^([^:\n]{1,80}):\s?.*$/.exec(lines[at]);
+            if (!m || !names.has(m[1].trim())) break;
+            at++;
+            dropped++;
+          }
+          if (dropped) body = lines.slice(at).join("\n");
+        }
+        const dir = dirOf(d.md);
+        for (const [whole, bang, label, href] of [...body.matchAll(/(!?)\[([^\]]*)\]\(([^)\s]+)\)/g)]) {
+          if (/^(https?:|mailto:|#|idb:)/i.test(href)) continue;
+          const target = resolvePath(dir, href);
+          const linked = docs.get(target.replace(/(_all)?\.(md|csv)$/i, ""));
+          let next: string | null = null;
+          if (!bang && linked && /\.(md|csv)$/i.test(target)) next = made.includes(linked.pageId) ? `[${label}](#/p/${linked.pageId})` : label;
+          else {
+            const url = await store(target);
+            if (url) next = `${bang}[${label}](${url})`;
+          }
+          if (next !== null) body = body.split(whole).join(next);
+        }
+        if (body.trim()) {
+          // the parser builds real picture elements, which would try to load "idb://…": give it a harmless
+          // address while it works, and put the stored one back afterwards
+          const held = body.replace(/idb:\/\/([\w-]+)/g, STAND_IN + "#stored-$1");
+          const blocks = JSON.parse(JSON.stringify(await toBlocks(held)).split(STAND_IN + "#stored-").join("idb://")) as unknown[];
+          await updatePage(d.pageId, { content: withPageLinks(blocks) });
+        }
       }
+      tick();
     }
+    return result;
+  } catch (e) {
+    // leave nothing half-imported behind
+    await db
+      .applyQuietly([db.pages, db.files, db.history, db.tombs], async () => {
+        await db.pages.bulkDelete(made);
+        await db.files.bulkDelete(madeFiles);
+        await db.history.where("pageId").anyOf(made).delete();
+      })
+      .catch(() => undefined);
+    throw e;
   }
-
-  const ordered = [...mds].sort((a, b) => depth(a) - depth(b));
-  // pages are created first and filled second, so every link target already has its id
-  for (const m of ordered) {
-    if (rowPages.has(m)) continue;
-    const parent = parentOf(m);
-    await createPage(parent ?? result.root, {
-      id: idByStem.get(stem(m))!,
-      title: stripId(baseOf(m).replace(/\.md$/i, "")),
-      // a page in a database's folder that matched no row of the table is still one of its rows
-      ...(parent && dbStems.has(dirOf(stem(m))) ? { isRow: true } : {}),
-    });
-    result.pages++;
-  }
-  for (const p of databases) {
-    const id = idByStem.get(stem(p))!;
-    await db.pages.update(id, { parentId: parentOf(p) ?? result.root });
-  }
-  for (const m of ordered) {
-    const { title, content } = await read(m);
-    const id = rowPages.get(m) ?? idByStem.get(stem(m))!;
-    // a row keeps the name its table gave it
-    await updatePage(id, rowPages.has(m) ? { content } : { title, content });
-  }
-  return result;
 }
 
 // ---------- one entry point ----------
@@ -374,10 +497,11 @@ export type Imported =
 export async function importFile(
   file: File,
   toBlocks: (markdown: string) => unknown[] | Promise<unknown[]>,
+  onProgress?: (done: number, total: number) => void,
 ): Promise<Imported> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b;
-  if (isZip) return { kind: "notion", ...(await importNotion(await unzipDeep(bytes), toBlocks)) };
+  if (isZip) return { kind: "notion", ...(await importNotion(await unzipDeep(bytes), toBlocks, onProgress)) };
   const content = new TextDecoder().decode(bytes);
   if (looksLikeTickTick(content)) return { kind: "ticktick", ...(await importTickTick(content)) };
   throw new ImportError(

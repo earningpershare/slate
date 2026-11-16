@@ -3,3 +3,7 @@ dist
 dev-dist
 *.log
 graphify-out
+
+# private data: never publish
+*Export-*.zip
+notion-export/

@@ -74,12 +74,16 @@ const TOOLS = [
  },
  {
   "name": "read_page",
-  "description": "Read one page: its title and content as Markdown. For a database it returns the columns (with their types and select options) and the rows; for a row, its column values and its own content.",
+  "description": "Read one page: its title and content as Markdown. For a database it returns the columns (with their types and select options) and up to 200 rows at a time (rows_from continues); for a row, its column values and its own content.",
   "schema": {
    "type": "object",
    "properties": {
     "id": {
      "type": "string"
+    },
+    "rows_from": {
+     "type": "integer",
+     "description": "For a database with more than 200 rows: the number of the first row to return (0 is the first)"
     }
    },
    "required": [
@@ -143,6 +147,26 @@ const TOOLS = [
     "icon": {
      "type": "string",
      "description": "One emoji"
+    }
+   },
+   "required": [
+    "id"
+   ],
+   "additionalProperties": false
+  }
+ },
+ {
+  "name": "move_page",
+  "description": "Move a page, with everything under it, to sit under another page or at the top level. Use it to reorganise a workspace. A database row moved out of its database becomes an ordinary page. To put something into a database, use add_row instead.",
+  "schema": {
+   "type": "object",
+   "properties": {
+    "id": {
+     "type": "string"
+    },
+    "parent_id": {
+     "type": "string",
+     "description": "Id of the page to move it under. Leave out (or \"\") for the top level."
     }
    },
    "required": [
@@ -536,8 +560,38 @@ function pump() {
   }
 }
 
+// Files the tab has been invited to fetch, by one-time token: { path, expires }
+const offered = new Map();
+const IMPORT_TIMEOUT = 30 * 60_000; // a large workspace takes a while to bring in
+
+/** "import_file": check the file here, then let the tab fetch it and import it. */
+function offerFile(input) {
+  const file = typeof input?.path === "string" ? input.path.trim().replace(/^"(.*)"$/, "$1") : "";
+  if (!file) return { error: "Give the full path of the file to import." };
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return { error: `There is no file at ${file}` };
+  }
+  if (!stat.isFile()) return { error: `${file} is not a file.` };
+  if (!/\.(zip|csv)$/i.test(file)) return { error: "Only a Notion export (.zip) or a TickTick backup (.csv) can be imported." };
+  if (stat.size > 1500 * 1024 * 1024) return { error: "That file is larger than 1.5 GB, which is more than a browser can take in one go. Export the workspace in parts." };
+  const token = crypto.randomBytes(16).toString("hex");
+  offered.set(token, { path: file, expires: Date.now() + IMPORT_TIMEOUT });
+  return { token, input: { token, name: path.basename(file), size: stat.size } };
+}
+
 /** Hand a call to the tab and wait for its answer. */
 function callTab(name, input) {
+  let timeout = CALL_TIMEOUT;
+  let token = "";
+  if (name === "import_file") {
+    const offer = offerFile(input);
+    if (offer.error) return Promise.resolve({ text: offer.error, error: true });
+    ({ token, input } = offer);
+    timeout = IMPORT_TIMEOUT;
+  }
   return new Promise((resolve) => {
     const id = crypto.randomBytes(8).toString("hex");
     const finish = (result) => {
@@ -548,6 +602,7 @@ function callTab(name, input) {
       waiting.delete(id);
       const at = queue.findIndex((c) => c.id === id);
       if (at >= 0) queue.splice(at, 1);
+      offered.delete(token);
       resolve(result);
     };
     const noTab =
@@ -557,7 +612,7 @@ function callTab(name, input) {
       ` (Slate's confirmation will show a pairing code ending in ${CODE.slice(-4)}.)`;
     waiting.set(id, {
       resolve: finish,
-      timer: setTimeout(() => finish({ text: "Slate did not answer in time (a confirmation may still be waiting for the person).", error: true }), CALL_TIMEOUT),
+      timer: setTimeout(() => finish({ text: "Slate did not answer in time (a confirmation may still be waiting for the person).", error: true }), timeout),
       // still not picked up, and no tab has asked for work lately: there is no tab
       grace: setInterval(() => queue.some((c) => c.id === id) && parked.size === 0 && Date.now() - lastPoll > TAB_GRACE && finish({ text: noTab, error: true }), 1000),
     });
@@ -607,6 +662,16 @@ const server = http.createServer(async (req, res) => {
     };
     for (const [k, v] of Object.entries(cors)) res.setHeader(k, v);
     if (req.method === "OPTIONS") return void res.writeHead(204).end();
+    // a file the tab was invited to import: only the paired tab, only with the token of that one call
+    if (url.pathname === "/file" && req.method === "GET") {
+      const token = url.searchParams.get("token") ?? "";
+      const t = url.searchParams.get("t") ?? "";
+      const offer = offered.get(token);
+      if (!fresh(t) || !same(url.searchParams.get("m"), hmac(KEY, `file:${token}:${t}`))) return void res.writeHead(401).end();
+      if (!offer || offer.expires < Date.now()) return void res.writeHead(404).end();
+      res.writeHead(200, { "content-type": "application/octet-stream", "content-length": fs.statSync(offer.path).size });
+      return void fs.createReadStream(offer.path).pipe(res);
+    }
     // "are you the bridge I am paired with?": prove it by signing the tab's random number
     if (url.pathname === "/hello" && req.method === "GET") {
       const n = url.searchParams.get("n") ?? "";
@@ -692,6 +757,12 @@ async function handle(msg) {
         tools: [
           ...TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.schema, ...(t.danger ? { annotations: { destructiveHint: true } } : {}) })),
           {
+            name: "import_file",
+            description:
+              "Import a file that is on this computer into the person's Slate: a Notion export (.zip, exported from Notion as Markdown & CSV) or a TickTick / 滴答清單 backup (.csv). Everything is added (a Notion workspace lands under one new page, keeping its page nesting, databases, pictures and links); nothing already in Slate is replaced. Give the full path of the file. A large export can take a few minutes.",
+            inputSchema: { type: "object", properties: { path: { type: "string", description: "Full path of the .zip or .csv file on this computer" } }, required: ["path"], additionalProperties: false },
+          },
+          {
             name: "slate_connect",
             description: "Get the link that connects the person's Slate (in their browser) to Claude on this computer. Use it when they ask to connect, set up or pair Slate, or when a Slate tool says it is not connected. Show them the link as a clickable link.",
             inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false },
@@ -703,7 +774,7 @@ async function handle(msg) {
       if (name === "slate_connect") {
         return reply({ content: [{ type: "text", text: `${CONNECT}\nAfter that, Slate has to stay open in that browser while you work in it. (Manual pairing code, only if the link cannot be used: ${CODE})` }], isError: false });
       }
-      if (!TOOLS.some((t) => t.name === name)) return fail(-32602, `Unknown tool: ${name}`);
+      if (name !== "import_file" && !TOOLS.some((t) => t.name === name)) return fail(-32602, `Unknown tool: ${name}`);
       const result = await run(name, params?.arguments ?? {});
       return reply({ content: [{ type: "text", text: result.text }], isError: !!result.error });
     }

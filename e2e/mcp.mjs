@@ -8,6 +8,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import zlib from "node:zlib";
 
 const base = process.argv[2] ?? "http://localhost:5183/";
 const shots = process.argv[3];
@@ -101,7 +102,8 @@ await step("the bridge introduces itself and lists the same tools the app has", 
   assert.equal(init.result.protocolVersion, "2025-06-18");
   assert.match(init.result.instructions, /Slate workspace/);
   const { tools } = (await claude.request("tools/list")).result;
-  assert.ok(tools.length >= 13);
+  assert.ok(tools.length >= 16);
+  assert.ok(["import_file", "move_page"].every((n) => tools.some((t) => t.name === n)));
   // asking to connect gets a link to click, not a command to run
   const connect = (await claude.tool("slate_connect")).text;
   assert.ok(connect.includes(LINK));
@@ -236,6 +238,83 @@ await step("Claude writes a page with Markdown, and a remote picture in it is de
   const stored = JSON.stringify((await store("pages")).find((p) => p.id === made.data.id).content);
   assert.ok(!stored.includes('"type":"image"'));
   assert.ok(stored.includes("https://evil.example/leak.png?d=1")); // kept, as a link only
+});
+
+await step("Claude imports a Notion export that is on this computer, with no file dialog", async () => {
+  // an export in Notion's current layout, written to disk like a download
+  const zip = (files) => {
+    const parts = [];
+    const dir = [];
+    let offset = 0;
+    for (const [name, value] of Object.entries(files)) {
+      const raw = Buffer.from(value);
+      const body = zlib.deflateRawSync(raw);
+      const n = Buffer.from(name);
+      const local = Buffer.alloc(30);
+      local.writeUInt32LE(0x04034b50, 0);
+      local.writeUInt16LE(0x800, 6);
+      local.writeUInt16LE(8, 8);
+      local.writeUInt32LE(body.length, 18);
+      local.writeUInt32LE(raw.length, 22);
+      local.writeUInt16LE(n.length, 26);
+      const central = Buffer.alloc(46);
+      central.writeUInt32LE(0x02014b50, 0);
+      central.writeUInt16LE(0x800, 8);
+      central.writeUInt16LE(8, 10);
+      central.writeUInt32LE(body.length, 20);
+      central.writeUInt32LE(raw.length, 24);
+      central.writeUInt16LE(n.length, 28);
+      central.writeUInt32LE(offset, 42);
+      parts.push(local, n, body);
+      dir.push(central, n);
+      offset += 30 + n.length + body.length;
+    }
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt16LE(dir.length / 2, 8);
+    end.writeUInt16LE(dir.length / 2, 10);
+    end.writeUInt32LE(dir.reduce((a, d) => a + d.length, 0), 12);
+    end.writeUInt32LE(offset, 16);
+    return Buffer.concat([...parts, ...dir, end]);
+  };
+  const A = "a".repeat(32);
+  const B = "b".repeat(32);
+  const C = "c".repeat(32);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "slate-export-"));
+  const file = path.join(dir, "Export.zip");
+  fs.writeFileSync(
+    file,
+    zip({
+      [`Export-1/Private & Shared/讀書 ${A}.md`]: "# 讀書\n\n## 重點\n\n- 一\n",
+      [`Export-1/Private & Shared/讀書/第二章 ${B}.md`]: "# 第二章\n\n內文\n",
+      [`Export-1/Private & Shared/讀書/書單 ${C}_all.csv`]: "書名,頁數\n原子習慣,320\n",
+    }),
+  );
+  const r = await claude.tool("import_file", { path: file });
+  assert.equal(r.isError, false);
+  assert.deepEqual([r.data.imported, r.data.pages, r.data.databases, r.data.rows], ["Notion export", 2, 1, 1]);
+  const pages = await store("pages");
+  const root = pages.find((p) => p.id === r.data.everything_is_under_page.id);
+  const book = pages.find((p) => p.title === "讀書");
+  assert.equal(book.parentId, root.id);
+  assert.equal(pages.find((p) => p.title === "第二章").parentId, book.id);
+  assert.equal(pages.find((p) => p.title === "原子習慣").isRow, true);
+  await page.waitForSelector(".toast >> text=匯入完成");
+
+  // and then tidies up: a page can be moved under another
+  const moved = await claude.tool("move_page", { id: pages.find((p) => p.title === "第二章").id, parent_id: root.id });
+  assert.equal(moved.data.moved, true);
+  assert.equal((await store("pages")).find((p) => p.title === "第二章").parentId, root.id);
+
+  // what it will not do
+  assert.match((await claude.tool("import_file", { path: path.join(dir, "nope.zip") })).text, /There is no file/);
+  const other = path.join(dir, "notes.txt");
+  fs.writeFileSync(other, "secret");
+  assert.match((await claude.tool("import_file", { path: other })).text, /Only a Notion export/); // not a way to read any file
+  // the file door opens only for the paired tab and the token of one call
+  const url = "http://127.0.0.1:" + PORT;
+  assert.equal((await fetch(`${url}/file?token=${"0".repeat(32)}&t=${Date.now()}&m=${"0".repeat(64)}`, { headers: { origin } })).status, 401);
+  assert.equal((await fetch(url + "/file", { headers: { origin: "https://evil.example" } })).status, 403);
 });
 
 await step("bad calls are answered, not executed", async () => {

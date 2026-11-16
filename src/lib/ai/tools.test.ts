@@ -31,6 +31,7 @@ describe("tool definitions", () => {
     }
     // everything that destroys data asks first
     expect(tools.filter((t) => t.danger).map((t) => t.name).sort()).toEqual(["delete_task", "trash_page"]);
+    expect(tools.map((t) => t.name)).toContain("move_page");
   });
 
   it("input is checked before a tool runs", async () => {
@@ -65,6 +66,30 @@ describe("pages", () => {
     // what was there before can be brought back from the page's history, and an open editor is told to reload
     expect((await db.history.where("pageId").equals(trip.id).count()) > 0).toBe(true);
     expect(written).toContain(trip.id);
+  });
+
+  it("move a page with what is under it, but never into itself, a database or a locked page", async () => {
+    const a = (await call("create_page", { title: "甲" })).data;
+    const b = (await call("create_page", { title: "乙" })).data;
+    const kid = (await call("create_page", { title: "甲的子頁", parent_id: a.id })).data;
+    expect((await call("move_page", { id: a.id, parent_id: b.id })).data).toMatchObject({ moved: true, parent: "乙" });
+    expect((await db.pages.get(a.id))!.parentId).toBe(b.id);
+    expect((await db.pages.get(kid.id))!.parentId).toBe(a.id); // it came along
+    expect((await call("list_pages", {})).data.map((p: { title: string }) => p.title)).toEqual(["乙"]);
+    expect(await call("move_page", { id: b.id, parent_id: kid.id })).toMatchObject({ error: true }); // would make a loop
+    expect(await call("move_page", { id: a.id, parent_id: a.id })).toMatchObject({ error: true });
+    expect((await call("move_page", { id: a.id, parent_id: b.id })).data).toMatchObject({ moved: false });
+    expect((await call("move_page", { id: a.id })).data).toMatchObject({ moved: true, parent: "(top level)" });
+    expect((await db.pages.get(a.id))!.parentId).toBe("");
+    const d = (await call("create_database", { title: "表" })).data;
+    expect(await call("move_page", { id: a.id, parent_id: d.id })).toMatchObject({ error: true });
+    await db.pages.update(b.id, { locked: true });
+    expect(await call("move_page", { id: a.id, parent_id: b.id })).toMatchObject({ error: true });
+    expect(await call("move_page", { id: b.id, parent_id: a.id })).toMatchObject({ error: true });
+    // a row taken out of its database is a page from then on
+    const row = (await call("add_row", { database_id: d.id, title: "列" })).data;
+    await call("move_page", { id: row.id, parent_id: a.id });
+    expect(await db.pages.get(row.id)).toMatchObject({ parentId: a.id, isRow: false });
   });
 
   it("a locked page cannot be changed in any way, and a trashed page is gone for the tools", async () => {
@@ -207,6 +232,14 @@ describe("databases", () => {
 
     expect((await call("update_row", { id: lunch.id, values: { 已報帳: true, 金額: 150, 日期: null } })).data).toEqual({ id: lunch.id, title: "午餐", 金額: 150, 類別: "餐飲", 已報帳: true });
     expect(await call("update_row", { id: lunch.id, values: { 不存在: 1 } })).toMatchObject({ error: true });
+    // a long table is read 200 rows at a time
+    const big = (await call("create_database", { title: "很多列", columns: [] })).data;
+    await db.pages.bulkAdd(Array.from({ length: 450 }, (_, n) => ({ id: "big" + n, parentId: big.id, kind: "page" as const, isRow: true, title: "列 " + n, sort: n, createdAt: 1, updatedAt: 1 })));
+    const first = (await call("read_page", { id: big.id })).data;
+    expect([first.rows.length, first.rows[0].title]).toEqual([200, "列 0"]);
+    expect(first.note).toContain("rows_from: 200");
+    const last = (await call("read_page", { id: big.id, rows_from: 400 })).data;
+    expect([last.rows.length, last.rows[0].title, last.note]).toEqual([50, "列 400", undefined]);
     // a locked database takes no new rows and no changes to the ones it has
     await db.pages.update(d.id, { locked: true });
     expect(await call("add_row", { database_id: d.id, title: "晚餐" })).toMatchObject({ error: true });

@@ -474,13 +474,20 @@ function SettingsModal({
       setMsg("匯入中，檔案大的話需要一點時間…");
       try {
         const [{ importFile }, { markdownToBlocks }] = await Promise.all([import("./lib/importers"), import("./components/Editor")]);
-        const r = await importFile(f, markdownToBlocks);
+        let shown = 0;
+        const r = await importFile(f, markdownToBlocks, (done, total) => {
+          // a big workspace takes minutes: say how far along it is, a few times a second at most
+          if (Date.now() - shown < 300) return;
+          shown = Date.now();
+          setMsg(`匯入中… ${Math.round((done / total) * 100)}%（請不要關閉這個分頁）`);
+        });
         if (r.kind === "ticktick") {
           setMsg(`已從滴答清單匯入 ${r.tasks} 筆任務${r.lists ? `、${r.lists} 個清單` : ""}。`);
           navigate("/tasks/inbox");
         } else {
           setMsg(
-            `已從 Notion 匯入 ${r.pages} 個頁面${r.databases ? `、${r.databases} 個資料庫（${r.rows} 列）` : ""}${r.files ? `、${r.files} 個附件` : ""}，放在「從 Notion 匯入」底下。`,
+            `已從 Notion 匯入 ${r.pages} 個頁面${r.databases ? `、${r.databases} 個資料庫（${r.rows} 列）` : ""}${r.files ? `、${r.files} 個附件` : ""}，放在「從 Notion 匯入」底下。` +
+              (r.skipped ? `略過了 ${r.skipped} 個沒有標題也沒有內容的空白頁。` : ""),
           );
           openPage(r.root);
         }

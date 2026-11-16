@@ -69,6 +69,40 @@ async function loadTools() {
   return { tools, callTool };
 }
 
+/** A file on this computer that Claude was asked to import: fetch it from the bridge and bring it in. */
+async function importOffered(url: string, sign: (message: string) => Promise<string>, offer: { token: string; name: string; size: number }) {
+  try {
+    toast(`Claude：正在匯入「${offer.name}」（${Math.max(1, Math.round(offer.size / 1e6))} MB），請不要關閉這個分頁…`);
+    const t = Date.now();
+    const res = await fetch(`${url}/file?token=${offer.token}&t=${t}&m=${await sign(`file:${offer.token}:${t}`)}`, { cache: "no-store" });
+    if (!res.ok) return { text: "Slate could not fetch the file from the bridge.", error: true };
+    const file = new File([await res.blob()], offer.name);
+    const [{ importFile, ImportError }, editor] = await Promise.all([import("../importers"), import("../../components/Editor")]);
+    try {
+      const r = await importFile(file, editor.markdownToBlocks);
+      toast(`Claude：「${offer.name}」匯入完成。`);
+      if (r.kind === "ticktick") return { text: JSON.stringify({ imported: "TickTick backup", tasks: r.tasks, new_lists: r.lists }), error: false };
+      return {
+        text: JSON.stringify({
+          imported: "Notion export",
+          pages: r.pages,
+          databases: r.databases,
+          rows: r.rows,
+          attachments: r.files,
+          blank_pages_skipped: r.skipped,
+          everything_is_under_page: { id: r.root, title: "從 Notion 匯入" },
+        }),
+        error: false,
+      };
+    } catch (e) {
+      // the importer takes back whatever it had already brought in
+      return { text: "The import failed and nothing was added: " + (e instanceof ImportError || e instanceof Error ? e.message : String(e)), error: true };
+    }
+  } catch (e) {
+    return { text: "The import failed: " + (e instanceof Error ? e.message : String(e)), error: true };
+  }
+}
+
 async function loop(mine: number, signal: AbortSignal) {
   const url = bridgeUrl();
   let kit: Awaited<ReturnType<typeof loadTools>> | null = null;
@@ -120,6 +154,17 @@ async function loop(mine: number, signal: AbortSignal) {
       continue;
     }
     if (!call) continue;
+
+    if (call.name === "import_file") {
+      const result = await importOffered(url, sign, call.input as { token: string; name: string; size: number });
+      const t = Date.now();
+      await fetch(url + "/result", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: call.id, ...result, t, m: await sign(`result:${call.id}:${t}`) }),
+      }).catch(() => undefined);
+      continue;
+    }
 
     kit ??= await loadTools();
     const { tools, callTool } = kit;

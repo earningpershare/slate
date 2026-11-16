@@ -47,7 +47,7 @@ describe("the MCP bridge file", () => {
       server: { type: "node", entry_point: "server/slate-mcp.mjs", mcp_config: { command: "node", args: ["${__dirname}/server/slate-mcp.mjs"] } },
     });
     expect(manifest.version).toBe(JSON.parse(fs.readFileSync("package.json", "utf8")).version);
-    expect(manifest.tools.map((t: { name: string }) => t.name)).toEqual(["slate_connect", ...wanted.map((t) => t.name)]);
+    expect(manifest.tools.map((t: { name: string }) => t.name)).toEqual(["slate_connect", "import_file", ...wanted.map((t) => t.name)]);
     expect(Buffer.from(files.get("icon.png")!).subarray(1, 4).toString()).toBe("PNG");
   });
 });
