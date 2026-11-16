@@ -424,6 +424,9 @@ export function slateTools(host: ToolHost): Tool[] {
       },
       async run(i) {
         const p = unlocked(await page(i.id));
+        // taking something out of a locked page or database changes that one too
+        const from = p.parentId ? await db.pages.get(p.parentId) : undefined;
+        if (from && alive(from)) unlocked(from, from.kind === "database" ? "database" : "page");
         const to = str(i.parent_id) ? unlocked(await page(i.parent_id)) : null;
         if (to?.kind === "database") throw new ToolError("A page cannot be moved into a database. Use add_row to add a row to it.");
         if (to && (to.id === p.id || (await descendantsOf(p.id)).some((d) => d.id === to.id))) throw new ToolError("A page cannot be moved into itself or into something under it.");

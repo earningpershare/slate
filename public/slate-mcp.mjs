@@ -569,17 +569,21 @@ function offerFile(input) {
   const file = typeof input?.path === "string" ? input.path.trim().replace(/^"(.*)"$/, "$1") : "";
   if (!file) return { error: "Give the full path of the file to import." };
   let stat;
+  let real;
   try {
-    stat = fs.statSync(file);
+    real = fs.realpathSync(file); // what the name really points at, so a link cannot dress another file up as a .zip
+    stat = fs.statSync(real);
   } catch {
     return { error: `There is no file at ${file}` };
   }
   if (!stat.isFile()) return { error: `${file} is not a file.` };
-  if (!/\.(zip|csv)$/i.test(file)) return { error: "Only a Notion export (.zip) or a TickTick backup (.csv) can be imported." };
+  if (!/\.(zip|csv)$/i.test(real)) return { error: "Only a Notion export (.zip) or a TickTick backup (.csv) can be imported." };
   if (stat.size > 1500 * 1024 * 1024) return { error: "That file is larger than 1.5 GB, which is more than a browser can take in one go. Export the workspace in parts." };
   const token = crypto.randomBytes(16).toString("hex");
-  offered.set(token, { path: file, expires: Date.now() + IMPORT_TIMEOUT });
-  return { token, input: { token, name: path.basename(file), size: stat.size } };
+  // the file as it is now: if it is swapped before the tab fetches it, the fetch is refused
+  offered.set(token, { path: real, expires: Date.now() + IMPORT_TIMEOUT, size: stat.size, mtime: stat.mtimeMs, ino: stat.ino });
+  // the tab shows the person this path and asks before fetching anything
+  return { token, input: { token, name: path.basename(real), path: real, size: stat.size } };
 }
 
 /** Hand a call to the tab and wait for its answer. */
@@ -669,7 +673,15 @@ const server = http.createServer(async (req, res) => {
       const offer = offered.get(token);
       if (!fresh(t) || !same(url.searchParams.get("m"), hmac(KEY, `file:${token}:${t}`))) return void res.writeHead(401).end();
       if (!offer || offer.expires < Date.now()) return void res.writeHead(404).end();
-      res.writeHead(200, { "content-type": "application/octet-stream", "content-length": fs.statSync(offer.path).size });
+      offered.delete(token); // good for one fetch only
+      let now;
+      try {
+        now = fs.statSync(offer.path);
+      } catch {
+        return void res.writeHead(404).end();
+      }
+      if (now.size !== offer.size || now.mtimeMs !== offer.mtime || now.ino !== offer.ino) return void res.writeHead(409).end();
+      res.writeHead(200, { "content-type": "application/octet-stream", "content-length": now.size });
       return void fs.createReadStream(offer.path).pipe(res);
     }
     // "are you the bridge I am paired with?": prove it by signing the tab's random number

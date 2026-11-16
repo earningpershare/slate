@@ -70,7 +70,13 @@ async function loadTools() {
 }
 
 /** A file on this computer that Claude was asked to import: fetch it from the bridge and bring it in. */
-async function importOffered(url: string, sign: (message: string) => Promise<string>, offer: { token: string; name: string; size: number }) {
+async function importOffered(url: string, sign: (message: string) => Promise<string>, offer: { token: string; name: string; path?: string; size: number }) {
+  // Reading a file off the computer is the person's call, like deleting is: nothing is fetched until they say yes here.
+  const shown = String(offer.path ?? offer.name).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, " ").slice(0, 300);
+  const megabytes = Math.max(1, Math.round(offer.size / 1e6));
+  if (!window.confirm(`Claude 想要把這台電腦上的檔案匯入這個 Slate：\n\n${shown}\n（${megabytes} MB）\n\n內容會加進來，不會取代現有資料。要允許嗎？`)) {
+    return { text: "The person declined the import in Slate. Do not try again unless they ask.", error: true };
+  }
   try {
     toast(`Claude：正在匯入「${offer.name}」（${Math.max(1, Math.round(offer.size / 1e6))} MB），請不要關閉這個分頁…`);
     const t = Date.now();
@@ -156,7 +162,7 @@ async function loop(mine: number, signal: AbortSignal) {
     if (!call) continue;
 
     if (call.name === "import_file") {
-      const result = await importOffered(url, sign, call.input as { token: string; name: string; size: number });
+      const result = await importOffered(url, sign, call.input as { token: string; name: string; path?: string; size: number });
       const t = Date.now();
       await fetch(url + "/result", {
         method: "POST",

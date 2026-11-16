@@ -86,6 +86,17 @@ describe("pages", () => {
     await db.pages.update(b.id, { locked: true });
     expect(await call("move_page", { id: a.id, parent_id: b.id })).toMatchObject({ error: true });
     expect(await call("move_page", { id: b.id, parent_id: a.id })).toMatchObject({ error: true });
+    // nothing leaves a locked page or a locked database either
+    await db.pages.update(b.id, { locked: false });
+    const inside = (await call("create_page", { title: "鎖住的頁面裡的", parent_id: b.id })).data;
+    const kept = (await call("add_row", { database_id: d.id, title: "鎖住的表裡的" })).data;
+    await db.pages.update(b.id, { locked: true });
+    await db.pages.update(d.id, { locked: true });
+    expect(await call("move_page", { id: inside.id })).toMatchObject({ error: true });
+    expect(await call("move_page", { id: kept.id, parent_id: a.id })).toMatchObject({ error: true });
+    expect((await db.pages.get(inside.id))!.parentId).toBe(b.id);
+    expect(await db.pages.get(kept.id)).toMatchObject({ parentId: d.id, isRow: true });
+    await db.pages.update(d.id, { locked: false });
     // a row taken out of its database is a page from then on
     const row = (await call("add_row", { database_id: d.id, title: "列" })).data;
     await call("move_page", { id: row.id, parent_id: a.id });

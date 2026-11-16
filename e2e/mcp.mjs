@@ -290,6 +290,19 @@ await step("Claude imports a Notion export that is on this computer, with no fil
       [`Export-1/Private & Shared/讀書/書單 ${C}_all.csv`]: "書名,頁數\n原子習慣,320\n",
     }),
   );
+  // Slate asks the person first, naming the file; "no" fetches nothing
+  let asked = "";
+  page.once("dialog", (d) => {
+    asked = d.message();
+    void d.dismiss();
+  });
+  const refused = await claude.tool("import_file", { path: file });
+  assert.ok(asked.includes(fs.realpathSync(file)) && asked.includes("匯入"));
+  assert.equal(refused.isError, true);
+  assert.match(refused.text, /declined/);
+  assert.ok(!(await store("pages")).some((p) => p.title === "讀書"));
+
+  page.once("dialog", (d) => void d.accept());
   const r = await claude.tool("import_file", { path: file });
   assert.equal(r.isError, false);
   assert.deepEqual([r.data.imported, r.data.pages, r.data.databases, r.data.rows], ["Notion export", 2, 1, 1]);
