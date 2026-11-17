@@ -126,6 +126,53 @@ export const plain = (title: unknown) => {
   return t.length > 60 ? t.slice(0, 60) + "…" : t || "未命名";
 };
 
+/**
+ * A page's blocks, ready to be turned into Markdown for a model. Links to other pages and
+ * embedded tables are blocks of this app's own; converted as they are, they come out as
+ * "page deleted", because nothing is there to look the page up. Here each becomes an ordinary
+ * link carrying the page's title and id, so the model sees what is linked and can follow it.
+ */
+async function withLinkText(blocks: unknown[]): Promise<unknown[]> {
+  const ids = new Set<string>();
+  const collect = (list: unknown[]) => {
+    for (const raw of list) {
+      const b = raw as Node;
+      const id = (b?.props as Node | undefined)?.pageId;
+      if ((b?.type === "pageLink" || b?.type === "database") && typeof id === "string" && id) ids.add(id);
+      // a page mentioned in the middle of a sentence
+      if (Array.isArray(b?.content)) for (const n of b.content as Node[]) if (n?.type === "mention" && typeof (n.props as Node | undefined)?.pageId === "string") ids.add((n.props as Node).pageId as string);
+      if (Array.isArray(b?.children)) collect(b.children);
+    }
+  };
+  collect(blocks);
+  if (ids.size === 0) return blocks;
+  const found = new Map((await db.pages.bulkGet([...ids])).filter(alive).map((p) => [p.id, p]));
+  const swap = (list: unknown[]): unknown[] =>
+    list.map((raw) => {
+      const b = raw as Node;
+      const children = Array.isArray(b?.children) ? swap(b.children) : b?.children;
+      const id = (b?.props as Node | undefined)?.pageId;
+      if ((b?.type === "pageLink" || b?.type === "database") && typeof id === "string" && id) {
+        const p = found.get(id);
+        const label = p ? `${p.kind === "database" ? "🗃️" : "📄"} ${plain(p.title)}` : "（連結的頁面已不存在）";
+        const content = p ? [{ type: "link", href: "#/p/" + id, content: [{ type: "text", text: label, styles: {} }] }] : [{ type: "text", text: label, styles: {} }];
+        return { type: "paragraph", content };
+      }
+      const content = Array.isArray(b?.content)
+        ? (b.content as Node[]).map((n) => {
+            const mentioned = n?.type === "mention" ? (n.props as Node | undefined)?.pageId : undefined;
+            if (typeof mentioned !== "string") return n;
+            const p = found.get(mentioned);
+            return p
+              ? { type: "link", href: "#/p/" + mentioned, content: [{ type: "text", text: plain(p.title), styles: {} }] }
+              : { type: "text", text: "（提到的頁面已不存在）", styles: {} };
+          })
+        : b?.content;
+      return b && typeof b === "object" ? { ...b, ...(content !== undefined ? { content } : {}), ...(children ? { children } : {}) } : raw;
+    });
+  return swap(blocks);
+}
+
 /** A locked page is not to be changed by the assistant in any way. */
 function unlocked(p: Page, what = "page"): Page {
   if (p.locked) throw new ToolError(`This ${what} is locked, so it cannot be changed. Tell the person; they can unlock it from the page's menu.`);
@@ -353,7 +400,7 @@ export function slateTools(host: ToolHost): Tool[] {
       describe: () => "讀取頁面",
       async run(i) {
         const p = await page(i.id);
-        const content = p.content?.length ? await host.toMarkdown(p.content) : "";
+        const content = p.content?.length ? await host.toMarkdown(await withLinkText(p.content)) : "";
         if (p.kind === "database") {
           const schema = p.schema ?? [];
           const rows = (await db.pages.where("parentId").equals(p.id).toArray()).filter((r) => alive(r) && r.isRow).sort((a, b) => a.sort - b.sort);

@@ -103,6 +103,37 @@ describe("pages", () => {
     expect(await db.pages.get(row.id)).toMatchObject({ parentId: a.id, isRow: false });
   });
 
+  it("links to other pages read as links, not as deleted pages", async () => {
+    const target = (await call("create_page", { title: "行李清單" })).data;
+    const table = (await call("create_database", { title: "預算" })).data;
+    const host = (await call("create_page", { title: "旅行" })).data;
+    // blocks as the editor stores them: this app's own link blocks, one of them nested, one to a page that is gone
+    await db.pages.update(host.id, {
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "先看", styles: {} }] },
+        { type: "pageLink", props: { pageId: target.id } },
+        { type: "bulletListItem", content: [{ type: "text", text: "外層", styles: {} }], children: [{ type: "database", props: { pageId: table.id } }] },
+        { type: "pageLink", props: { pageId: "gone-for-good" } },
+        { type: "paragraph", content: [{ type: "text", text: "細節在 ", styles: {} }, { type: "mention", props: { pageId: target.id } }, { type: "text", text: " 裡", styles: {} }] },
+      ],
+    });
+    // the stand-in converter prints what it is given; the real one would have printed "deleted" for the raw blocks
+    const seen: unknown[] = [];
+    const reading = slateTools({ toBlocks: () => [], toMarkdown: (blocks) => (seen.push(...blocks), "ok") });
+    await callTool(reading, "read_page", { id: host.id });
+    const text = JSON.stringify(seen);
+    expect(text).not.toContain('"pageLink"');
+    expect(text).toContain(`"href":"#/p/${target.id}"`);
+    expect(text).toContain("📄 行李清單");
+    expect(text).toContain(`"href":"#/p/${table.id}"`); // the nested one too
+    expect(text).toContain("🗃️ 預算");
+    expect(text).toContain("（連結的頁面已不存在）");
+    expect(text).not.toContain('"mention"'); // a page mentioned inside a sentence reads as its title, linked
+    expect(text.split(`"href":"#/p/${target.id}"`).length).toBe(3);
+    // reading does not change what is stored
+    expect(JSON.stringify((await db.pages.get(host.id))!.content)).toContain('"pageLink"');
+  });
+
   it("a locked page cannot be changed in any way, and a trashed page is gone for the tools", async () => {
     const p = (await call("create_page", { title: "舊筆記", markdown: "內容" })).data;
     await db.pages.update(p.id, { locked: true });
