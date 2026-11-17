@@ -69,14 +69,28 @@ async function loadTools() {
   return { tools, callTool };
 }
 
+/**
+ * Put a yes/no question to the person. A browser does not show a dialog from a tab that is in
+ * the background (and some silence dialogs altogether): it answers "no" by itself, at once.
+ * That is not the person declining, and must not be reported as such.
+ */
+function askPerson(message: string): "yes" | "no" | "unseen" {
+  if (document.visibilityState !== "visible") return "unseen";
+  const asked = performance.now();
+  if (window.confirm(message)) return "yes";
+  return performance.now() - asked < 150 ? "unseen" : "no"; // nobody reads and clicks that fast
+}
+const UNSEEN =
+  "Slate could not ask the person: its tab is in the background, or the browser is blocking its dialogs. Nothing was done. Ask them to bring the Slate tab to the front, then try again.";
+
 /** A file on this computer that Claude was asked to import: fetch it from the bridge and bring it in. */
 async function importOffered(url: string, sign: (message: string) => Promise<string>, offer: { token: string; name: string; path?: string; size: number }) {
   // Reading a file off the computer is the person's call, like deleting is: nothing is fetched until they say yes here.
   const shown = String(offer.path ?? offer.name).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, " ").slice(0, 300);
   const megabytes = Math.max(1, Math.round(offer.size / 1e6));
-  if (!window.confirm(`Claude 想要把這台電腦上的檔案匯入這個 Slate：\n\n${shown}\n（${megabytes} MB）\n\n內容會加進來，不會取代現有資料。要允許嗎？`)) {
-    return { text: "The person declined the import in Slate. Do not try again unless they ask.", error: true };
-  }
+  const answer = askPerson(`Claude 想要把這台電腦上的檔案匯入這個 Slate：\n\n${shown}\n（${megabytes} MB）\n\n內容會加進來，不會取代現有資料。要允許嗎？`);
+  if (answer === "unseen") return { text: UNSEEN, error: true };
+  if (answer === "no") return { text: "The person declined the import in Slate. Do not try again unless they ask.", error: true };
   try {
     toast(`Claude：正在匯入「${offer.name}」（${Math.max(1, Math.round(offer.size / 1e6))} MB），請不要關閉這個分頁…`);
     const t = Date.now();
@@ -204,7 +218,10 @@ async function loop(mine: number, signal: AbortSignal) {
     }
     let result: { text: string; error: boolean };
     // the same rule as the built-in assistant: nothing is destroyed without the person saying yes, here
-    if (tool?.danger && !window.confirm(`Claude 想要${label}。\n\n要允許嗎？`)) {
+    const answer = tool?.danger ? askPerson(`Claude 想要${label}。\n\n要允許嗎？`) : "yes";
+    if (answer === "unseen") {
+      result = { text: UNSEEN, error: true };
+    } else if (answer === "no") {
       result = { text: "The person declined this action in Slate. Do not try it again; carry on with the rest or ask what they would like instead.", error: true };
     } else {
       result = await callTool(tools, call.name, call.input);

@@ -294,7 +294,7 @@ await step("Claude imports a Notion export that is on this computer, with no fil
   let asked = "";
   page.once("dialog", (d) => {
     asked = d.message();
-    void d.dismiss();
+    setTimeout(() => void d.dismiss(), 400); // read first, as a person would
   });
   const refused = await claude.tool("import_file", { path: file });
   assert.ok(asked.includes(fs.realpathSync(file)) && asked.includes("匯入"));
@@ -341,7 +341,7 @@ await step("deleting asks the person in the Slate tab: no means no, yes means ye
   let asked = "";
   page.once("dialog", (d) => {
     asked = d.message();
-    void d.dismiss();
+    setTimeout(() => void d.dismiss(), 400); // read first, as a person would
   });
   const refused = await claude.tool("delete_task", { id: taskId });
   assert.match(asked, /Claude 想要永久刪除任務「從 Claude 來的任務」/);
@@ -370,6 +370,17 @@ await step("tidying up: many pages go to the trash on a single question", async 
   assert.equal(asked.length, 1); // asked once, not three times
   assert.match(asked[0], /把 3 個項目移到垃圾桶：「空白甲」、「空白乙」、「空白丙」/);
   assert.ok((await store("pages")).filter((p) => made.includes(p.id)).every((p) => p.deletedAt));
+});
+
+await step("a question the person never saw is not taken for a no", async () => {
+  const victim = (await claude.tool("add_task", { title: "不該被當成拒絕" })).data.id;
+  // the browser answers by itself, instantly, as it does for a tab in the background
+  page.once("dialog", (d) => void d.dismiss());
+  const r = await claude.tool("delete_task", { id: victim });
+  assert.equal(r.isError, true);
+  assert.match(r.text, /could not ask the person/);
+  assert.doesNotMatch(r.text, /declined/);
+  assert.ok((await store("tasks")).some((x) => x.id === victim)); // and nothing was deleted
 });
 
 await step("a second Claude app on the same computer shares the bridge", async () => {
