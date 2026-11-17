@@ -273,6 +273,18 @@ export function slateTools(host: ToolHost): Tool[] {
     if (before !== after && !renamed.has(id)) renamed.set(id, before);
   };
   const formerly = (id: string) => (renamed.has(id) ? `（助理剛才把它從「${plain(renamed.get(id))}」改名）` : "");
+  /** A page that may go to the trash: not locked, nothing locked under it, and not a row of a locked database. */
+  const removable = async (id: unknown): Promise<Page> => {
+    const p = unlocked(await page(id));
+    const owner = p.parentId ? await db.pages.get(p.parentId) : undefined;
+    if (owner && alive(owner) && p.isRow) unlocked(owner, "database");
+    // trashing a page takes everything under it along: a locked page down there protects the whole branch
+    const locked = (await descendantsOf(p.id)).filter((d) => d.locked);
+    if (locked.length) {
+      throw new ToolError(`"${plain(p.title)}" contains locked pages (${locked.slice(0, 5).map((d) => `"${plain(d.title)}"`).join(", ")}), so it cannot be moved to the trash. Tell the person.`);
+    }
+    return p;
+  };
   const setContent = async (id: string, markdown: string, append: boolean) => {
     const blocks = safeBlocks(await host.toBlocks(safeMarkdown(markdown)));
     const current = append ? ((await db.pages.get(id))?.content ?? []) : [];
@@ -447,14 +459,35 @@ export function slateTools(host: ToolHost): Tool[] {
         return `把${p.kind === "database" ? "資料庫" : "頁面"}「${plain(p.title)}」${formerly(p.id)}${inside ? `和它底下的 ${inside} 個項目` : ""}移到垃圾桶`;
       },
       async run(i) {
-        const p = unlocked(await page(i.id));
-        // trashing a page takes everything under it along: a locked page down there protects the whole branch
-        const locked = (await descendantsOf(p.id)).filter((d) => d.locked);
-        if (locked.length) {
-          throw new ToolError(`This page contains locked pages (${locked.slice(0, 5).map((d) => `"${d.title || "未命名"}"`).join(", ")}), so it cannot be moved to the trash. Tell the person.`);
-        }
+        const p = await removable(i.id);
         await trashPage(p.id);
         return { id: p.id, title: p.title, trashed: true };
+      },
+    },
+    {
+      name: "trash_pages",
+      description:
+        "Move several pages, databases or database rows to the trash at once (each with everything under it). The person is asked once, for all of them together. Use it when tidying up, instead of calling trash_page many times. Everything can be restored from the trash in the app. If any one of them cannot be trashed, none is.",
+      danger: true,
+      schema: obj({ ids: { type: "array", items: { type: "string" }, description: "Ids of the pages to trash (up to 500)" } }, ["ids"]),
+      async describe(i) {
+        const ids = Array.isArray(i.ids) ? [...new Set(i.ids.map(str).filter(Boolean))] : [];
+        const found = (await db.pages.bulkGet(ids)).filter(alive);
+        if (found.length === 0) return "把多個頁面移到垃圾桶";
+        let inside = 0;
+        for (const p of found.slice(0, 200)) inside += (await descendantsOf(p.id)).length;
+        const shown = found.slice(0, 6).map((p) => `「${plain(p.title)}」${formerly(p.id)}`).join("、");
+        return `把 ${found.length} 個項目移到垃圾桶：${shown}${found.length > 6 ? ` 等` : ""}${inside ? `（連同它們底下的 ${inside} 個項目）` : ""}`;
+      },
+      async run(i) {
+        const ids = Array.isArray(i.ids) ? [...new Set(i.ids.map(str).filter(Boolean))] : [];
+        if (ids.length === 0) throw new ToolError("ids is empty.");
+        if (ids.length > 500) throw new ToolError("At most 500 pages at a time.");
+        // every one is checked before any is touched
+        const pages: Page[] = [];
+        for (const id of ids) pages.push(await removable(id));
+        for (const p of pages) await trashPage(p.id);
+        return { trashed: pages.length, titles: pages.slice(0, 20).map((p) => p.title || "未命名") };
       },
     },
     {

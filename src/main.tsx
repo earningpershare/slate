@@ -12,7 +12,13 @@ import "./styles-extra.css";
 import "./styles-mobile.css";
 
 dayjs.locale("zh-tw");
-registerSW({ immediate: true });
+registerSW({
+  immediate: true,
+  // a tab can stay open for days: look for a new version every hour (the page reloads itself when one arrives)
+  onRegisteredSW(_url, registration) {
+    if (registration) setInterval(() => void registration.update().catch(() => undefined), 60 * 60_000);
+  },
+});
 
 // reconnect to the devices this one is linked with, if any
 void startLink(db);

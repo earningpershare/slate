@@ -108,7 +108,7 @@ await step("the bridge introduces itself and lists the same tools the app has", 
   const connect = (await claude.tool("slate_connect")).text;
   assert.ok(connect.includes(LINK));
   assert.ok(connect.includes("ending in " + CODE.slice(-4))); // so the person can compare with Slate's question
-  assert.deepEqual(tools.filter((t) => t.annotations?.destructiveHint).map((t) => t.name).sort(), ["delete_task", "trash_page"]);
+  assert.deepEqual(tools.filter((t) => t.annotations?.destructiveHint).map((t) => t.name).sort(), ["delete_task", "trash_page", "trash_pages"]);
   assert.ok(tools.every((t) => t.inputSchema.type === "object" && t.description.length > 30));
   assert.deepEqual((await claude.request("ping")).result, {});
 });
@@ -355,7 +355,25 @@ await step("deleting asks the person in the Slate tab: no means no, yes means ye
   assert.ok(!(await store("tasks")).some((t) => t.id === taskId));
 });
 
+await step("tidying up: many pages go to the trash on a single question", async () => {
+  const made = [];
+  for (const title of ["空白甲", "空白乙", "空白丙"]) made.push((await claude.tool("create_page", { title })).data.id);
+  const asked = [];
+  const onDialog = (d) => {
+    asked.push(d.message());
+    void d.accept();
+  };
+  page.on("dialog", onDialog);
+  const r = await claude.tool("trash_pages", { ids: made });
+  page.off("dialog", onDialog);
+  assert.equal(r.data.trashed, 3);
+  assert.equal(asked.length, 1); // asked once, not three times
+  assert.match(asked[0], /把 3 個項目移到垃圾桶：「空白甲」、「空白乙」、「空白丙」/);
+  assert.ok((await store("pages")).filter((p) => made.includes(p.id)).every((p) => p.deletedAt));
+});
+
 await step("a second Claude app on the same computer shares the bridge", async () => {
+  // it asks for the port on every call without piling anything up (no warning on its error stream)
   const other = client();
   await other.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "other", version: "1" } });
   const added = await other.tool("add_task", { title: "第二個程式加的" });

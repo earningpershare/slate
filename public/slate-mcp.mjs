@@ -193,6 +193,27 @@ const TOOLS = [
   "danger": true
  },
  {
+  "name": "trash_pages",
+  "description": "Move several pages, databases or database rows to the trash at once (each with everything under it). The person is asked once, for all of them together. Use it when tidying up, instead of calling trash_page many times. Everything can be restored from the trash in the app. If any one of them cannot be trashed, none is.",
+  "schema": {
+   "type": "object",
+   "properties": {
+    "ids": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "description": "Ids of the pages to trash (up to 500)"
+    }
+   },
+   "required": [
+    "ids"
+   ],
+   "additionalProperties": false
+  },
+  "danger": true
+ },
+ {
   "name": "create_database",
   "description": "Create a database (a table of rows with typed columns) under a page or at the top level. Column types: text, number, date, checkbox, select, multiSelect, url.",
   "schema": {
@@ -714,12 +735,21 @@ const server = http.createServer(async (req, res) => {
 let owner = false; // this copy owns the port
 function listen() {
   return new Promise((resolve) => {
-    server.once("error", () => resolve(false));
-    server.listen(PORT, "127.0.0.1", () => {
+    // whichever of the two happens, the other handler is taken off again: a copy that does not
+    // own the port asks for it on every call, for as long as it runs
+    const failed = () => {
+      server.removeListener("listening", ready);
+      resolve(false);
+    };
+    const ready = () => {
+      server.removeListener("error", failed);
       owner = true;
       log("listening on 127.0.0.1:" + PORT);
       resolve(true);
-    });
+    };
+    server.once("error", failed);
+    server.once("listening", ready);
+    server.listen(PORT, "127.0.0.1");
   });
 }
 

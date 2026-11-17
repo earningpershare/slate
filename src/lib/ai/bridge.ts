@@ -175,6 +175,27 @@ async function loop(mine: number, signal: AbortSignal) {
     kit ??= await loadTools();
     const { tools, callTool } = kit;
     const tool = tools.find((t) => t.name === call.name);
+    if (!tool) {
+      // Claude's side knows a tool this tab does not: the tab is an older version. Fetch the new one
+      // (the page reloads itself when it has arrived) and say what is going on.
+      void navigator.serviceWorker
+        ?.getRegistration()
+        .then((r) => r?.update())
+        .catch(() => undefined);
+      const t = Date.now();
+      await fetch(url + "/result", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          id: call.id,
+          text: `The Slate tab is an older version that does not have "${call.name}" yet. It is updating itself now: wait about 20 seconds and try again. If it still fails, ask the person to reload the Slate tab.`,
+          error: true,
+          t,
+          m: await sign(`result:${call.id}:${t}`),
+        }),
+      }).catch(() => undefined);
+      continue;
+    }
     let label = call.name;
     try {
       if (tool && call.input && typeof call.input === "object") label = await tool.describe(call.input as Record<string, unknown>);

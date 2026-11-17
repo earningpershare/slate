@@ -30,7 +30,7 @@ describe("tool definitions", () => {
       for (const r of t.schema.required) expect(t.schema.properties[r]).toBeTruthy();
     }
     // everything that destroys data asks first
-    expect(tools.filter((t) => t.danger).map((t) => t.name).sort()).toEqual(["delete_task", "trash_page"]);
+    expect(tools.filter((t) => t.danger).map((t) => t.name).sort()).toEqual(["delete_task", "trash_page", "trash_pages"]);
     expect(tools.map((t) => t.name)).toContain("move_page");
   });
 
@@ -143,6 +143,35 @@ describe("what the person is asked before something is destroyed", () => {
     expect(await del.describe({ id: t.id })).toBe("永久刪除任務「搬家」和它的 1 個子任務");
     // an id that does not exist is not dressed up as something else
     expect(await del.describe({ id: "nope" })).toBe("永久刪除任務");
+  });
+
+  it("several pages go to the trash on one question, and all or none", async () => {
+    const many = tools.find((t) => t.name === "trash_pages")!;
+    const a = (await call("create_page", { title: "空白一" })).data;
+    const b = (await call("create_page", { title: "空白二" })).data;
+    const kid = (await call("create_page", { title: "底下的", parent_id: b.id })).data;
+    const d = (await call("create_database", { title: "表" })).data;
+    const row = (await call("add_row", { database_id: d.id, title: "一列" })).data;
+    expect(await many.describe({ ids: [a.id, b.id, row.id] })).toBe("把 3 個項目移到垃圾桶：「空白一」、「空白二」、「一列」（連同它們底下的 1 個項目）");
+    expect(await many.describe({ ids: Array.from({ length: 9 }, () => a.id).concat(b.id) })).toContain("把 2 個項目"); // the same id twice counts once
+
+    // one of them is protected: nothing at all is trashed
+    await db.pages.update(kid.id, { locked: true });
+    const refused = await call("trash_pages", { ids: [a.id, b.id, row.id] });
+    expect(refused.error).toBe(true);
+    expect(refused.text).toContain("底下的");
+    expect((await db.pages.toArray()).filter((p) => p.deletedAt)).toHaveLength(0);
+    await db.pages.update(kid.id, { locked: false });
+    await db.pages.update(d.id, { locked: true }); // a row of a locked table stays too
+    expect(await call("trash_pages", { ids: [a.id, row.id] })).toMatchObject({ error: true });
+    expect(await call("trash_page", { id: row.id })).toMatchObject({ error: true });
+    await db.pages.update(d.id, { locked: false });
+
+    expect((await call("trash_pages", { ids: [a.id, b.id, row.id] })).data).toMatchObject({ trashed: 3 });
+    expect((await db.pages.bulkGet([a.id, b.id, row.id])).every((p) => !!p!.deletedAt)).toBe(true);
+    expect((await call("read_page", { id: d.id })).data.rows).toEqual([]);
+    expect(await call("trash_pages", { ids: [] })).toMatchObject({ error: true });
+    expect(await call("trash_pages", { ids: ["nope"] })).toMatchObject({ error: true });
   });
 
   it("cannot be dressed up by renaming first or by a title that fakes the dialog", async () => {
