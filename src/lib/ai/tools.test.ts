@@ -155,6 +155,22 @@ describe("what the person is asked before something is destroyed", () => {
     expect(await many.describe({ ids: [a.id, b.id, row.id] })).toBe("把 3 個項目移到垃圾桶：「空白一」、「空白二」、「一列」（連同它們底下的 1 個項目）");
     expect(await many.describe({ ids: Array.from({ length: 9 }, () => a.id).concat(b.id) })).toContain("把 2 個項目"); // the same id twice counts once
 
+    // the count of what goes along is exact however many are chosen, and nothing is counted twice
+    const tops: string[] = [];
+    for (let n = 0; n < 230; n++) {
+      const id = "bulk" + n;
+      tops.push(id);
+      await db.pages.bulkAdd([
+        { id, parentId: "", kind: "page", title: "批次 " + n, sort: n, createdAt: 1, updatedAt: 1 },
+        { id: id + "k", parentId: id, kind: "page", title: "子頁", sort: 0, createdAt: 1, updatedAt: 1 },
+      ]);
+    }
+    expect(await many.describe({ ids: tops })).toContain("（連同它們底下的 230 個項目）");
+    expect(await many.describe({ ids: [...tops, "bulk0k"] })).toContain("把 231 個項目"); // a child chosen itself is not also "along"
+    expect(await many.describe({ ids: [...tops, "bulk0k"] })).toContain("（連同它們底下的 229 個項目）");
+    expect(await many.describe({ ids: Array.from({ length: 501 }, (_, n) => (n < 230 ? tops[n] : "x" + n)) })).toContain("不會執行");
+    await db.pages.bulkDelete([...tops, ...tops.map((t) => t + "k")]);
+
     // one of them is protected: nothing at all is trashed
     await db.pages.update(kid.id, { locked: true });
     const refused = await call("trash_pages", { ids: [a.id, b.id, row.id] });

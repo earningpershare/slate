@@ -474,10 +474,15 @@ export function slateTools(host: ToolHost): Tool[] {
         const ids = Array.isArray(i.ids) ? [...new Set(i.ids.map(str).filter(Boolean))] : [];
         const found = (await db.pages.bulkGet(ids)).filter(alive);
         if (found.length === 0) return "把多個頁面移到垃圾桶";
-        let inside = 0;
-        for (const p of found.slice(0, 200)) inside += (await descendantsOf(p.id)).length;
+        // more than run() accepts: it will refuse, and the question must not suggest otherwise
+        if (ids.length > 500) return `把 ${ids.length} 個項目移到垃圾桶（超過一次 500 個的上限，不會執行）`;
+        // Everything that goes along, counted in full and once each: the number the person agrees to
+        // is the number that is trashed.
+        const chosen = new Set(found.map((p) => p.id));
+        const along = new Set<string>();
+        for (const p of found) for (const d of await descendantsOf(p.id)) if (!chosen.has(d.id)) along.add(d.id);
         const shown = found.slice(0, 6).map((p) => `「${plain(p.title)}」${formerly(p.id)}`).join("、");
-        return `把 ${found.length} 個項目移到垃圾桶：${shown}${found.length > 6 ? ` 等` : ""}${inside ? `（連同它們底下的 ${inside} 個項目）` : ""}`;
+        return `把 ${found.length} 個項目移到垃圾桶：${shown}${found.length > 6 ? ` 等` : ""}${along.size ? `（連同它們底下的 ${along.size} 個項目）` : ""}`;
       },
       async run(i) {
         const ids = Array.isArray(i.ids) ? [...new Set(i.ids.map(str).filter(Boolean))] : [];
