@@ -3,6 +3,7 @@
 //   iPhone / iPad                                 a configuration profile that puts Slate on the
 //                                                 home screen (public/slate.mobileconfig)
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { keep, setLang, simplified } from "../lib/lang";
 import { ChevronLeft, Download, RefreshCw, Share, Smartphone, X } from "lucide-react";
 
 interface InstallPrompt extends Event {
@@ -205,6 +206,10 @@ export function Landing({ onContinue }: { onContinue: () => void }) {
         <header className="landing-top">
           <img src="icon-192.png" alt="" width={34} height={34} />
           <b>Slate</b>
+          {/* each offered in its own script, so whoever needs it can read it */}
+          <button className="landing-lang" lang={simplified ? "zh-Hant" : "zh-Hans"} onClick={() => setLang(simplified ? "zh-TW" : "zh-CN")}>
+            {simplified ? keep("繁體") : "简体"}
+          </button>
           <button className="landing-top-get" onClick={() => setView("detail")}>
             下載
           </button>
@@ -376,7 +381,7 @@ export function Landing({ onContinue }: { onContinue: () => void }) {
         <li>
           <small>語言</small>
           <b>中文</b>
-          <span>繁體</span>
+          <span>繁體・簡體</span>
         </li>
         <li>
           <small>原始碼</small>

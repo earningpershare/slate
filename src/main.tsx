@@ -2,16 +2,18 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import dayjs from "dayjs";
 import "dayjs/locale/zh-tw";
+import "dayjs/locale/zh-cn";
 import { registerSW } from "virtual:pwa-register";
 import App from "./App";
 import { db } from "./db";
 import { startLink } from "./lib/link";
 import { followPairLink, startBridge } from "./lib/ai/bridge";
+import { simplified } from "./lib/lang";
 import "./styles.css";
 import "./styles-extra.css";
 import "./styles-mobile.css";
 
-dayjs.locale("zh-tw");
+dayjs.locale(simplified ? "zh-cn" : "zh-tw");
 registerSW({
   immediate: true,
   // a tab can stay open for days: look for a new version every hour (the page reloads itself when one arrives)

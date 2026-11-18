@@ -198,7 +198,7 @@ async function task(id: unknown): Promise<Task> {
 /** Find a task list by id or name; "" / inbox -> null. */
 async function listIdOf(value: unknown, create = false): Promise<string | null> {
   const name = str(value);
-  if (!name || /^(inbox|收件匣|收集箱)$/i.test(name)) return null;
+  if (!name || /^(inbox|收件匣|收件箱|收集箱)$/i.test(name)) return null;
   const lists = await db.lists.toArray();
   const hit = lists.find((l) => l.id === name) ?? lists.find((l) => l.name === name);
   if (hit) return hit.id;

@@ -2,11 +2,14 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+import { simplified } from "./scripts/simplified.mjs";
 
 export default defineConfig({
   // relative, so the build works from any address, including a sub-path like user.github.io/slate/
   base: "./",
   plugins: [
+    // every piece of interface text also gets its Simplified Chinese form
+    simplified(),
     react(),
     VitePWA({
       registerType: "autoUpdate",

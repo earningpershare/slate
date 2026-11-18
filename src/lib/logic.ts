@@ -2,6 +2,7 @@
 import dayjs from "dayjs";
 import type { Calc, Filter, Page, Property, PropValue, Repeat, Sort, Task } from "../types";
 import { evalFormula, type FValue } from "./formula";
+import { keep, simplified } from "./lang";
 
 export const uid = () =>
   Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
@@ -106,7 +107,7 @@ export function cellValue(
     case "formula": {
       if (depth > 8) return "#循環參照";
       const get = (name: string): FValue => {
-        if (name === "名稱" || name === "title") return row.title;
+        if (name === keep("名稱") || name === "名称" || name === "title") return row.title;
         const p = schema.find((x) => x.name === name);
         if (!p) throw new Error(`找不到屬性「${name}」`);
         const v = cellValue(row, p.id, schema, titles, depth + 1);
@@ -180,7 +181,7 @@ export function compareRows(a: Page, b: Page, sorts: Sort[], schema: Property[],
     if (typeof va === "number" && typeof vb === "number") c = va - vb;
     else if (prop?.type === "checkbox") c = Number(va === true) - Number(vb === true);
     else
-      c = displayValue(va, prop, titles).localeCompare(displayValue(vb, prop, titles), "zh-Hant", {
+      c = displayValue(va, prop, titles).localeCompare(displayValue(vb, prop, titles), simplified ? "zh-Hans" : "zh-Hant", {
         numeric: true,
       });
     if (c !== 0) return s.dir === "asc" ? c : -c;

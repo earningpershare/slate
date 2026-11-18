@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "../db";
+import { lang } from "../lib/lang";
 import { beginPairing, cancelPairing, joinWithCode, LinkError, removeDevice, unlink, useLink } from "../lib/link";
 
 const explain = (e: unknown) => (e instanceof LinkError ? e.message : "發生錯誤，請再試一次。");
@@ -83,7 +84,7 @@ export function SyncSection({ onMessage }: { onMessage: (m: string) => void }) {
           </ul>
           <p className="muted small">
             {link.reach === "unreachable" ? "目前連不上配對服務（沒有網路？），連上後會自動繼續。" : ""}
-            {lastSync ? ` 上次收到其他裝置的變更：${new Date(lastSync).toLocaleString("zh-TW")}。` : ""}
+            {lastSync ? ` 上次收到其他裝置的變更：${new Date(lastSync).toLocaleString(lang)}。` : ""}
             兩台裝置同時開著 Slate 就會自動同步，不用再輸入連結碼；分開時各自的修改會在下次同時開啟時合併。
           </p>
         </>

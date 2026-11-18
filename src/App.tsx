@@ -14,6 +14,7 @@ import {
   runBackup,
 } from "./lib/autobackup";
 import { rememberSeed } from "./lib/link";
+import { keep, lang, setLang } from "./lib/lang";
 import { SyncSection } from "./components/DeviceSync";
 import { InstallBar, InstallSection, Landing, wantsLanding } from "./components/Install";
 import { Modal, NARROW, navigate, openPage, useLocalState, useMedia, useRoute } from "./ui";
@@ -512,6 +513,17 @@ function SettingsModal({
         ))}
       </span>
 
+      <h3>語言</h3>
+      <span className="seg">
+        <button className={"seg-btn" + (lang === "zh-TW" ? " active" : "")} lang="zh-Hant" onClick={() => setLang("zh-TW")}>
+          {keep("繁體中文")}
+        </button>
+        <button className={"seg-btn" + (lang === "zh-CN" ? " active" : "")} lang="zh-Hans" onClick={() => setLang("zh-CN")}>
+          简体中文
+        </button>
+      </span>
+      <p className="muted">只改變介面的文字，你寫的內容不會被轉換。</p>
+
       <h3>手動備份</h3>
       <p className="muted">
         所有資料只存在這台裝置的這個瀏覽器裡{usage && `（目前約 ${usage}）`}。清除瀏覽器資料會一併清掉，請定期匯出備份。
@@ -546,7 +558,7 @@ function SettingsModal({
         <>
           <p className="muted">
             每 5 分鐘把有變動的資料寫入「{auto.dir}」，每天一個檔案，保留最近 14 天。
-            {auto.last > 0 && ` 上次備份：${new Date(auto.last).toLocaleString("zh-TW")}`}
+            {auto.last > 0 && ` 上次備份：${new Date(auto.last).toLocaleString(lang)}`}
           </p>
           <div className="row">
             {auto.state !== "granted" && (
